@@ -20,6 +20,11 @@ func handleAgentMessageUpdateInfo(incoming *map[string]interface{}, uUIDInfo *ca
 		  "action": "update_info"
 		}
 	*/
+	if uUIDInfo.CryptoProviderBindingID != "" {
+		if err := validateCryptoProviderAgentFields(*incoming); err != nil {
+			return nil, err
+		}
+	}
 	response := map[string]interface{}{}
 	agentMessage := agentMessageCheckin{}
 	if err := mapstructure.Decode(incoming, &agentMessage); err != nil {
@@ -30,6 +35,11 @@ func handleAgentMessageUpdateInfo(incoming *map[string]interface{}, uUIDInfo *ca
 		if err := database.DB.Get(&callback, `SELECT * FROM callback WHERE id=$1`, uUIDInfo.CallbackID); err != nil {
 			logging.LogError(err, "Failed to find callback information")
 			return nil, errors.New(fmt.Sprintf("Failed to find callback"))
+		}
+		if callback.CryptoProviderBindingID.Valid {
+			if err := validateCryptoProviderAgentFields(*incoming); err != nil {
+				return nil, err
+			}
 		}
 		if agentMessage.User != "" {
 			callback.User = agentMessage.User

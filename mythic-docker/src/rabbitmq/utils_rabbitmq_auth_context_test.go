@@ -79,3 +79,19 @@ func TestHostedFileAuthContextTokenIndexInvalidation(t *testing.T) {
 		t.Fatal("row invalidation should invalidate current hosted token")
 	}
 }
+
+func TestContainerOnlyRabbitMQAuthContext(t *testing.T) {
+	context := RabbitMQAuthContext{ContainerName: "example-container"}
+	if context.IsEmpty() {
+		t.Fatal("container identity was treated as an empty context")
+	}
+	token, err := GenerateRabbitMQAuthContextToken(context)
+	if err != nil || token == "" {
+		t.Fatalf("container context was not issued a token: %v", err)
+	}
+	defer InvalidateRabbitMQAuthContextToken(token)
+	loaded, err := ValidateRabbitMQAuthContextToken(token)
+	if err != nil || loaded.ContainerName != context.ContainerName {
+		t.Fatalf("container identity was lost: %+v %v", loaded, err)
+	}
+}

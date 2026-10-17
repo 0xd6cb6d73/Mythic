@@ -97,6 +97,11 @@ func MythicRPCCallbackUpdate(input MythicRPCCallbackUpdateMessage, authContext R
 		return response
 	}
 
+	if callback.CryptoProviderBindingID.Valid && (input.EncryptionKey != nil || input.DecryptionKey != nil || input.CryptoType != nil) {
+		response.Error = "provider session crypto cannot be replaced through callback updates"
+		return response
+	}
+
 	if input.User != nil {
 		callback.User = *input.User
 	}

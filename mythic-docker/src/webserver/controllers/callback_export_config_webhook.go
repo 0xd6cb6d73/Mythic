@@ -33,15 +33,17 @@ type ExportCallbackConfigurationPayloadType struct {
 	TranslationContainerName string `json:"translation_container"`
 }
 type ExportCallbackConfiguration struct {
-	Callback         databaseStructs.Callback                      `json:"callback"`
-	CallbackC2       []rabbitmq.PayloadConfigurationC2Profile      `json:"callback_c2"`
-	CallbackCommands []string                                      `json:"callback_commands"`
-	Payload          databaseStructs.Payload                       `json:"payload"`
-	PayloadType      ExportCallbackConfigurationPayloadType        `json:"payload_type"`
-	PayloadC2        []rabbitmq.PayloadConfigurationC2Profile      `json:"payload_c2"`
-	PayloadBuild     []rabbitmq.PayloadConfigurationBuildParameter `json:"payload_build"`
-	PayloadCommands  []string                                      `json:"payload_commands"`
-	PayloadFilename  string                                        `json:"payload_filename"`
+	// Provider sessions are descriptors only; their ratchets cannot be imported as keys.
+	CryptoProviderManaged bool                                          `json:"crypto_provider_managed,omitempty"`
+	Callback              databaseStructs.Callback                      `json:"callback"`
+	CallbackC2            []rabbitmq.PayloadConfigurationC2Profile      `json:"callback_c2"`
+	CallbackCommands      []string                                      `json:"callback_commands"`
+	Payload               databaseStructs.Payload                       `json:"payload"`
+	PayloadType           ExportCallbackConfigurationPayloadType        `json:"payload_type"`
+	PayloadC2             []rabbitmq.PayloadConfigurationC2Profile      `json:"payload_c2"`
+	PayloadBuild          []rabbitmq.PayloadConfigurationBuildParameter `json:"payload_build"`
+	PayloadCommands       []string                                      `json:"payload_commands"`
+	PayloadFilename       string                                        `json:"payload_filename"`
 }
 
 func ExportCallbackConfigWebhook(c *gin.Context) {
@@ -111,7 +113,7 @@ func ExportCallbackConfigWebhook(c *gin.Context) {
 			return
 		}
 	}
-	config := ExportCallbackConfiguration{}
+	config := ExportCallbackConfiguration{CryptoProviderManaged: callback.CryptoProviderBindingID.Valid}
 	config.Callback = callback
 	config.CallbackC2 = *rabbitmq.GetCallbackC2ProfileInformation(callback)
 	config.CallbackCommands = rabbitmq.GetCallbackCommandInformation(callback)

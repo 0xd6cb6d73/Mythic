@@ -102,6 +102,7 @@ type PayloadType struct {
 	SupportsDynamicLoading             bool                                       `json:"supports_dynamic_load"`
 	Description                        string                                     `json:"description"`
 	SupportedC2Profiles                []string                                   `json:"supported_c2_profiles"`
+	SupportedCryptoSchemes             []string                                   `json:"supported_crypto_schemes"`
 	TranslationContainerName           string                                     `json:"translation_container_name"`
 	MythicEncryptsData                 bool                                       `json:"mythic_encrypts"`
 	BuildParameters                    []BuildParameter                           `json:"build_parameters"`
@@ -304,6 +305,10 @@ func payloadTypeSync(in PayloadTypeSyncMessage) error {
 	if err != nil {
 		return err
 	}
+	supportedCryptoSchemes, err := supportedCryptoSchemesForSync(in.PayloadType)
+	if err != nil {
+		return err
+	}
 	err = database.DB.Get(&payloadtype, `SELECT * FROM payloadtype WHERE "name"=$1`, in.PayloadType.Name)
 	if errors.Is(err, sql.ErrNoRows) {
 		// this means we don't have the payload, so we need to create it and all the associated components
@@ -350,15 +355,16 @@ func payloadTypeSync(in PayloadTypeSyncMessage) error {
 		payloadtype.CommandHelpFunction = in.PayloadType.CommandHelpFunction
 		payloadtype.SemVer = in.PayloadType.SemVer
 		payloadtype.SupportedC2 = GetMythicJSONArrayFromStruct(in.PayloadType.SupportedC2Profiles)
+		payloadtype.SupportedCryptoSchemes = supportedCryptoSchemes
 		payloadtype.WrapperPayloadRequirements = GetMythicJSONArrayFromStruct(in.PayloadType.WrapperPayloadRequirements)
 		payloadtype.SupportsMultipleC2InBuild = in.PayloadType.SupportsMultipleC2InBuild
 		payloadtype.SupportsMultipleC2InstancesInBuild = in.PayloadType.SupportsMultipleC2InstancesInBuild
 		payloadtype.SupportedTranslationContainer = in.PayloadType.TranslationContainerName
 		statement, err := database.DB.PrepareNamed(`INSERT INTO payloadtype 
 			("name",author,container_running,file_extension,mythic_encrypts,note,supported_os,supports_dynamic_loading,wrapper,agent_type,message_format,command_augment_supported_agents,message_uuid_length,use_display_params_for_cli_history,
-			 c2_parameter_deviations, command_help_function, supports_multiple_c2_in_build, supports_multiple_c2_instances_in_build, supported_c2, semver, wrapper_payload_requirements, supported_translation_container)
+			 c2_parameter_deviations, command_help_function, supports_multiple_c2_in_build, supports_multiple_c2_instances_in_build, supported_c2, supported_crypto_schemes, semver, wrapper_payload_requirements, supported_translation_container)
 			VALUES (:name, :author, :container_running, :file_extension, :mythic_encrypts, :note, :supported_os, :supports_dynamic_loading, :wrapper,:agent_type, :message_format, :command_augment_supported_agents, :message_uuid_length, :use_display_params_for_cli_history,
-			        :c2_parameter_deviations, :command_help_function, :supports_multiple_c2_in_build, :supports_multiple_c2_instances_in_build, :supported_c2, :semver, :wrapper_payload_requirements, :supported_translation_container)
+			        :c2_parameter_deviations, :command_help_function, :supports_multiple_c2_in_build, :supports_multiple_c2_instances_in_build, :supported_c2, :supported_crypto_schemes, :semver, :wrapper_payload_requirements, :supported_translation_container)
 			RETURNING id`,
 		)
 		if err != nil {
@@ -419,6 +425,7 @@ func payloadTypeSync(in PayloadTypeSyncMessage) error {
 		payloadtype.CommandHelpFunction = in.PayloadType.CommandHelpFunction
 		payloadtype.SemVer = in.PayloadType.SemVer
 		payloadtype.SupportedC2 = GetMythicJSONArrayFromStruct(in.PayloadType.SupportedC2Profiles)
+		payloadtype.SupportedCryptoSchemes = supportedCryptoSchemes
 		payloadtype.WrapperPayloadRequirements = GetMythicJSONArrayFromStruct(in.PayloadType.WrapperPayloadRequirements)
 		payloadtype.SupportsMultipleC2InBuild = in.PayloadType.SupportsMultipleC2InBuild
 		payloadtype.SupportsMultipleC2InstancesInBuild = in.PayloadType.SupportsMultipleC2InstancesInBuild
@@ -430,7 +437,7 @@ func payloadTypeSync(in PayloadTypeSyncMessage) error {
 			message_uuid_length=:message_uuid_length, use_display_params_for_cli_history=:use_display_params_for_cli_history,
 			c2_parameter_deviations=:c2_parameter_deviations, command_help_function=:command_help_function, 
 			supports_multiple_c2_in_build=:supports_multiple_c2_in_build, supports_multiple_c2_instances_in_build=:supports_multiple_c2_instances_in_build, 
-			supported_c2=:supported_c2, semver=:semver, wrapper_payload_requirements=:wrapper_payload_requirements, supported_translation_container=:supported_translation_container
+			supported_c2=:supported_c2, supported_crypto_schemes=:supported_crypto_schemes, semver=:semver, wrapper_payload_requirements=:wrapper_payload_requirements, supported_translation_container=:supported_translation_container
 			WHERE id=:id`, payloadtype,
 		)
 		if err != nil {

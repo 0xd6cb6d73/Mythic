@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/its-a-feature/Mythic/crypto/provider"
 	"github.com/its-a-feature/Mythic/database"
 	databaseStructs "github.com/its-a-feature/Mythic/database/structs"
 	"github.com/its-a-feature/Mythic/eventing"
@@ -30,13 +31,14 @@ type ConsumingContainerSyncMessage struct {
 }
 
 type ConsumingContainerDefinition struct {
-	Name              string   `json:"name"`
-	Description       string   `json:"description"`
-	Type              string   `json:"type"`
-	Subscriptions     []string `json:"subscriptions"`
-	SemVer            string   `json:"semver"`
-	AgentIcon         *[]byte  `json:"agent_icon,omitempty"`
-	DarkModeAgentIcon *[]byte  `json:"dark_mode_agent_icon,omitempty"`
+	Name               string                 `json:"name"`
+	Description        string                 `json:"description"`
+	Type               string                 `json:"type"`
+	Subscriptions      []string               `json:"subscriptions"`
+	SemVer             string                 `json:"semver"`
+	AgentIcon          *[]byte                `json:"agent_icon,omitempty"`
+	DarkModeAgentIcon  *[]byte                `json:"dark_mode_agent_icon,omitempty"`
+	CryptoCapabilities *provider.Capabilities `json:"crypto_capabilities,omitempty"`
 }
 
 const (
@@ -45,7 +47,25 @@ const (
 	CONSUMING_SERVICES_TYPE_EVENTING                        = "eventing"
 	CONSUMING_SERVICES_TYPE_SCRIPTING                       = "scripting"
 	CONSUMING_SERVICES_TYPE_CHAT                            = "chat"
+	CONSUMING_SERVICES_TYPE_CRYPTO                          = "crypto"
 )
+
+func cryptoCapabilitiesForSync(definition ConsumingContainerDefinition) (databaseStructs.MythicJSONText, error) {
+	if definition.Type != CONSUMING_SERVICES_TYPE_CRYPTO {
+		if definition.CryptoCapabilities != nil {
+			return nil, errors.New("only crypto services may advertise crypto capabilities")
+		}
+		return databaseStructs.MythicJSONText("{}"), nil
+	}
+	if definition.CryptoCapabilities == nil {
+		return nil, errors.New("crypto services must advertise crypto capabilities")
+	}
+	if err := definition.CryptoCapabilities.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid crypto capabilities: %w", err)
+	}
+	encoded, err := json.Marshal(definition.CryptoCapabilities)
+	return databaseStructs.MythicJSONText(encoded), err
+}
 
 func init() {
 	RabbitMQConnection.AddRPCQueue(RPCQueueStruct{
@@ -89,6 +109,10 @@ func processConsumingContainerSyncMessages(msg amqp.Delivery) interface{} {
 func consumingServicesSync(in ConsumingContainerSyncMessage) error {
 	//logging.LogDebug("Received connection to c2Sync", "syncMessage", in)
 	consumingContainer := databaseStructs.ConsumingContainer{}
+	cryptoCapabilities, err := cryptoCapabilitiesForSync(in.ConsumingContainer)
+	if err != nil {
+		return err
+	}
 	if in.ConsumingContainer.Name == "" {
 		logging.LogError(nil, "Can't have consuming container with empty name - bad sync")
 		return errors.New("can't have consuming container with empty name - bad sync")
@@ -108,9 +132,10 @@ func consumingServicesSync(in ConsumingContainerSyncMessage) error {
 		consumingContainer.Type = in.ConsumingContainer.Type
 		consumingContainer.SemVer = in.ConsumingContainer.SemVer
 		consumingContainer.Subscriptions = GetMythicJSONArrayFromStruct(in.ConsumingContainer.Subscriptions)
+		consumingContainer.CryptoCapabilities = cryptoCapabilities
 		if statement, err := database.DB.PrepareNamed(`INSERT INTO consuming_container 
-			("name",container_running,description,deleted,type,subscriptions, semver) 
-			VALUES (:name, :container_running, :description, :deleted, :type, :subscriptions, :semver) 
+			("name",container_running,description,deleted,type,subscriptions, semver, crypto_capabilities)
+			VALUES (:name, :container_running, :description, :deleted, :type, :subscriptions, :semver, :crypto_capabilities)
 			RETURNING id`,
 		); err != nil {
 			logging.LogError(err, "Failed to create new consuming_container statement")
@@ -132,9 +157,10 @@ func consumingServicesSync(in ConsumingContainerSyncMessage) error {
 		consumingContainer.Type = in.ConsumingContainer.Type
 		consumingContainer.SemVer = in.ConsumingContainer.SemVer
 		consumingContainer.Subscriptions = GetMythicJSONArrayFromStruct(in.ConsumingContainer.Subscriptions)
+		consumingContainer.CryptoCapabilities = cryptoCapabilities
 		_, err = database.DB.NamedExec(`UPDATE consuming_container SET 
 			container_running=:container_running, description=:description, deleted=:deleted,
-			type=:type, subscriptions=:subscriptions, semver=:semver
+			type=:type, subscriptions=:subscriptions, semver=:semver, crypto_capabilities=:crypto_capabilities
 			WHERE id=:id`, consumingContainer,
 		)
 		if err != nil {

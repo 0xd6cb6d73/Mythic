@@ -57,7 +57,7 @@ func CallbackEncryptMessage(input MythicRPCCallbackEncryptBytesMessage, authCont
 	}
 	if cachedInfo.MythicEncrypts {
 		// Mythic does encryption, so handle it
-		cipherText, err := cachedInfo.IterateAndAct(&input.Message, "encrypt")
+		cipherText, err := cachedInfo.IterateAndActWithAuthContext(&input.Message, "encrypt", authContext)
 		if err != nil {
 			return nil, err
 		}

@@ -20,7 +20,7 @@ func RegisterNewPayload(payloadDefinition PayloadConfiguration, operatorOperatio
 	var err error
 	err = database.DB.Get(&payloadtype, `SELECT 
 		payloadtype.id, payloadtype."name", "wrapper", supported_os, supports_dynamic_loading, translation_container_id, mythic_encrypts, semver,
-		wrapper_payload_requirements
+		wrapper_payload_requirements, supported_crypto_schemes
 		FROM payloadtype 
 		WHERE payloadtype."name"=$1`, payloadDefinition.PayloadType)
 	if err != nil {
@@ -176,6 +176,10 @@ func RegisterNewPayload(payloadDefinition PayloadConfiguration, operatorOperatio
 			c2Profiles, err := associateC2ProfilesWithPayload(databasePayload, payloadDefinition.C2Profiles, authContext)
 			if err != nil {
 				logging.LogError(err, "Failed to associated C2 Profiles with Payload", "c2_profiles", payloadDefinition.C2Profiles)
+				database.UpdatePayloadWithError(databasePayload, err)
+				return
+			}
+			if err := validatePayloadCryptoProviderSelections(databasePayload.ID); err != nil {
 				database.UpdatePayloadWithError(databasePayload, err)
 				return
 			}

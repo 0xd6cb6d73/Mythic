@@ -523,16 +523,35 @@ func getFinalStringForDatabaseInstanceValueFromDefaultDatabaseString(parameterTy
 		return "", errors.New("Unknown parameter type")
 	}
 }
-func GetInterfaceValueForContainer(parameterType string, finalString string, encKey *[]byte, decKey *[]byte, cryptoType bool) (interface{}, error) {
+
+// Provider build configuration is opaque bytes. Its JSON projection is base64,
+// matching existing byte-valued encryption key fields; builders decode it before
+// passing it to the provider's agent API.
+func encodeCryptoProviderAgentConfig(config []byte) json.RawMessage {
+	if config == nil {
+		return nil
+	}
+	encoded, _ := json.Marshal(config)
+	return encoded
+}
+
+func GetInterfaceValueForContainer(parameterType string, finalString string, encKey *[]byte, decKey *[]byte, cryptoType bool, providerConfig ...json.RawMessage) (interface{}, error) {
+	if cryptoType && (parameterType == BUILD_PARAMETER_TYPE_CHOOSE_ONE || strings.HasPrefix(finalString, "provider:")) {
+		value := map[string]interface{}{
+			"value":   strings.TrimSpace(finalString),
+			"enc_key": encKey,
+			"dec_key": decKey,
+		}
+		if len(providerConfig) > 0 && len(providerConfig[0]) > 0 {
+			if !json.Valid(providerConfig[0]) {
+				return nil, errors.New("invalid crypto provider build configuration")
+			}
+			value["provider_config"] = providerConfig[0]
+		}
+		return value, nil
+	}
 	switch parameterType {
 	case BUILD_PARAMETER_TYPE_CHOOSE_ONE:
-		if cryptoType {
-			return map[string]interface{}{
-				"value":   strings.TrimSpace(finalString),
-				"enc_key": encKey,
-				"dec_key": decKey,
-			}, nil
-		}
 		return strings.TrimSpace(finalString), nil
 
 	case BUILD_PARAMETER_TYPE_CHOOSE_ONE_CUSTOM:
@@ -607,11 +626,13 @@ func GetPayloadC2ProfileInformation(payload databaseStructs.Payload) *[]PayloadC
 	c2profile.name "c2profile.name",
 	c2profile.id "c2profile.id",
 	c2profile.is_p2p "c2profile.is_p2p",
-	value, enc_key, dec_key,
+	c2profileparametersinstance.value, c2profileparametersinstance.enc_key, c2profileparametersinstance.dec_key,
+	crypto_provider_binding.agent_config "crypto_provider_agent_config",
 	c2profileparameters.crypto_type "c2profileparameters.crypto_type", 
 	c2profileparameters.parameter_type "c2profileparameters.parameter_type",
 	c2profileparameters.name "c2profileparameters.name"
-	FROM c2profileparametersinstance 
+	FROM c2profileparametersinstance
+	LEFT JOIN crypto_provider_binding ON c2profileparametersinstance.crypto_provider_binding_id=crypto_provider_binding.id
 	JOIN c2profileparameters ON c2profileparametersinstance.c2_profile_parameters_id = c2profileparameters.id 
 	JOIN c2profile ON c2profileparametersinstance.c2_profile_id = c2profile.id
 	WHERE payload_id=$1`, payload.ID); err != nil {
@@ -641,7 +662,7 @@ func GetPayloadC2ProfileInformation(payload databaseStructs.Payload) *[]PayloadC
 				parameter.Value,
 				parameter.EncKey,
 				parameter.DecKey,
-				parameter.C2ProfileParameter.IsCryptoType); err != nil {
+				parameter.C2ProfileParameter.IsCryptoType, encodeCryptoProviderAgentConfig(parameter.CryptoProviderAgentConfig)); err != nil {
 				logging.LogError(err, "Failed to get c2 profile parameter instance interface")
 				parametersValueDictionary[parameter.C2ProfileParameter.Name] = parameter.Value
 			} else {
@@ -662,11 +683,13 @@ func GetCallbackC2ProfileInformation(callback databaseStructs.Callback) *[]Paylo
 	c2profile.name "c2profile.name",
 	c2profile.id "c2profile.id",
 	c2profile.is_p2p "c2profile.is_p2p",
-	value, enc_key, dec_key,
+	c2profileparametersinstance.value, c2profileparametersinstance.enc_key, c2profileparametersinstance.dec_key,
+	crypto_provider_binding.agent_config "crypto_provider_agent_config",
 	c2profileparameters.crypto_type "c2profileparameters.crypto_type", 
 	c2profileparameters.parameter_type "c2profileparameters.parameter_type",
 	c2profileparameters.name "c2profileparameters.name"
-	FROM c2profileparametersinstance 
+	FROM c2profileparametersinstance
+	LEFT JOIN crypto_provider_binding ON c2profileparametersinstance.crypto_provider_binding_id=crypto_provider_binding.id
 	JOIN c2profileparameters ON c2profileparametersinstance.c2_profile_parameters_id = c2profileparameters.id 
 	JOIN c2profile ON c2profileparametersinstance.c2_profile_id = c2profile.id
 	WHERE callback_id=$1`, callback.ID); err != nil {
@@ -696,7 +719,7 @@ func GetCallbackC2ProfileInformation(callback databaseStructs.Callback) *[]Paylo
 				parameter.Value,
 				parameter.EncKey,
 				parameter.DecKey,
-				parameter.C2ProfileParameter.IsCryptoType); err != nil {
+				parameter.C2ProfileParameter.IsCryptoType, encodeCryptoProviderAgentConfig(parameter.CryptoProviderAgentConfig)); err != nil {
 				logging.LogError(err, "Failed to get c2 profile parameter instance interface")
 				parametersValueDictionary[parameter.C2ProfileParameter.Name] = parameter.Value
 			} else {
@@ -718,11 +741,13 @@ func GetBuildParameterInformation(payloadID int) *[]PayloadConfigurationBuildPar
 	buildparameterinstance.value,
 	buildparameterinstance.enc_key,
 	buildparameterinstance.dec_key,
+	crypto_provider_binding.agent_config "crypto_provider_agent_config",
 	buildparameter.name "buildparameter.name",
 	buildparameter.parameter_type "buildparameter.parameter_type",
 	buildparameter.crypto_type "buildparameter.crypto_type"
 	FROM
 	buildparameterinstance
+	LEFT JOIN crypto_provider_binding ON buildparameterinstance.crypto_provider_binding_id=crypto_provider_binding.id
 	JOIN buildparameter ON buildparameterinstance.build_parameter_id = buildparameter.id
 	WHERE
 	buildparameterinstance.payload_id=$1
@@ -738,7 +763,7 @@ func GetBuildParameterInformation(payloadID int) *[]PayloadConfigurationBuildPar
 				parameter.Value,
 				parameter.EncKey,
 				parameter.DecKey,
-				parameter.BuildParameter.IsCryptoType); err != nil {
+				parameter.BuildParameter.IsCryptoType, encodeCryptoProviderAgentConfig(parameter.CryptoProviderAgentConfig)); err != nil {
 				logging.LogError(err, "Failed to get c2 profile parameter instance interface")
 				buildValues[index].Value = parameter.Value
 			} else {
@@ -1226,11 +1251,13 @@ func GetTaskMessageCallbackC2ProfileInformation(callbackID int) []PayloadConfigu
 	if err := database.DB.Select(&c2profileParameterInstances, `SELECT 
 		c2profile.name "c2profile.name",
 		c2profile.id "c2profile.id",
-		value, enc_key, dec_key,
+		c2profileparametersinstance.value, c2profileparametersinstance.enc_key, c2profileparametersinstance.dec_key,
+		crypto_provider_binding.agent_config "crypto_provider_agent_config",
 		c2profileparameters.crypto_type "c2profileparameters.crypto_type", 
 		c2profileparameters.parameter_type "c2profileparameters.parameter_type",
 		c2profileparameters.name "c2profileparameters.name"
-		FROM c2profileparametersinstance 
+		FROM c2profileparametersinstance
+		LEFT JOIN crypto_provider_binding ON c2profileparametersinstance.crypto_provider_binding_id=crypto_provider_binding.id
 		JOIN c2profileparameters ON c2profileparametersinstance.c2_profile_parameters_id = c2profileparameters.id 
 		JOIN c2profile ON c2profileparametersinstance.c2_profile_id = c2profile.id
 		WHERE callback_id=$1`, callbackID); err != nil {
@@ -1256,7 +1283,7 @@ func GetTaskMessageCallbackC2ProfileInformation(callbackID int) []PayloadConfigu
 				parameter.Value,
 				parameter.EncKey,
 				parameter.DecKey,
-				parameter.C2ProfileParameter.IsCryptoType); err != nil {
+				parameter.C2ProfileParameter.IsCryptoType, encodeCryptoProviderAgentConfig(parameter.CryptoProviderAgentConfig)); err != nil {
 				logging.LogError(err, "Failed to get c2 profile parameter instance interface")
 				parametersValueDictionary[parameter.C2ProfileParameter.Name] = parameter.Value
 			} else {

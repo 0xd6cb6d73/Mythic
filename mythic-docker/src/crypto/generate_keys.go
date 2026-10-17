@@ -2,16 +2,19 @@ package mythicCrypto
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 
 	"github.com/its-a-feature/Mythic/logging"
 )
 
 type CryptoKeys struct {
-	EncKey   *[]byte `json:"enc_key,omitempty"`
-	DecKey   *[]byte `json:"dec_key,omitempty"`
-	Value    string  `json:"value"`
-	Location string  `json:"location,omitempty"`
+	EncKey         *[]byte         `json:"enc_key,omitempty"`
+	DecKey         *[]byte         `json:"dec_key,omitempty"`
+	Value          string          `json:"value"`
+	Location       string          `json:"location,omitempty"`
+	BindingID      *string         `json:"provider_binding_id,omitempty"`
+	ProviderConfig json.RawMessage `json:"provider_config,omitempty"`
 }
 
 func GenerateKeysForPayload(cryptoType string) (CryptoKeys, error) {

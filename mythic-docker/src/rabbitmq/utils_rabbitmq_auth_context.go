@@ -27,6 +27,7 @@ type RabbitMQAuthContext struct {
 	EventStepInstanceID int      `json:"eventstepinstance_id"`
 	SourceScopes        []string `json:"source_scopes"`
 	FileUUID            string   `json:"file_uuid,omitempty"`
+	ContainerName       string   `json:"container_name,omitempty"`
 }
 
 type rabbitMQAuthContextEntry struct {
@@ -246,6 +247,7 @@ func (authContext RabbitMQAuthContext) IsEmpty() bool {
 		authContext.APITokensID == 0 &&
 		authContext.EventStepInstanceID == 0 &&
 		authContext.FileUUID == "" &&
+		authContext.ContainerName == "" &&
 		len(authContext.SourceScopes) == 0
 }
 
