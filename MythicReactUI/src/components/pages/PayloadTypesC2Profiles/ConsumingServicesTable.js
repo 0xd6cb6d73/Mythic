@@ -125,6 +125,7 @@ export const ConsumingServicesTableRow = ({service, showDeleted}) => {
         switch(service.type){
             case "webhook":
             case "logging":
+            case "crypto":
                 setLocalData({...service});
                 break;
             case "eventing":
@@ -227,7 +228,7 @@ export const ConsumingServicesTableRow = ({service, showDeleted}) => {
             </span>
         );
     };
-    const renderBaseRow = ({w, typeLabel, metadataItems, actions, hasDetails = false}) => (
+    const renderBaseRow = ({w, typeLabel, metadataItems, actions, hasDetails = false, showFiles = true}) => (
         (showDeleted || !w.deleted) &&
         <TableRow key={w.id} hover>
             <MythicTableCell>
@@ -252,7 +253,7 @@ export const ConsumingServicesTableRow = ({service, showDeleted}) => {
             </MythicTableCell>
             <MythicTableCell>
                 <div className="items-center flex flex-wrap gap-3 mythic-service-actions gap-4 flex-nowrap">
-                    {renderFileButton(w)}
+                    {showFiles && renderFileButton(w)}
                     {actions}
                     {hasDetails &&
                         <InstalledServiceDetailToggle open={openDetails} onClick={() => setOpenDetails((current) => !current)} />
@@ -263,6 +264,22 @@ export const ConsumingServicesTableRow = ({service, showDeleted}) => {
     );
     const getTableRow = (w) => {
         switch(service.type){
+            case "crypto":
+                return renderBaseRow({
+                    w,
+                    typeLabel: "Crypto provider",
+                    metadataItems: [
+                        {label: "Type", value: w.type},
+                        {label: "Version", value: w.semver, chip: true},
+                        {label: "Schemes", value: w.crypto_capabilities?.schemes || []},
+                        {label: "API", value: w.crypto_capabilities?.api_version},
+                        {label: "Session persistence", value: w.crypto_capabilities?.session_persistence},
+                        {label: "Maximum message bytes", value: w.crypto_capabilities?.max_message_bytes},
+                        {label: "Result retention seconds", value: w.crypto_capabilities?.result_retention_seconds},
+                    ],
+                    actions: null,
+                    showFiles: false,
+                });
             case "webhook":
                 return renderBaseRow({
                     w,

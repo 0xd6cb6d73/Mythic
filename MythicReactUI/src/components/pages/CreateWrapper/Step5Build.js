@@ -20,6 +20,9 @@ import "ace-builds/src-noconflict/theme-github";
 import "ace-builds/src-noconflict/theme-monokai";
 import "ace-builds/src-noconflict/ext-searchbox";
 import {useTheme} from '@mui/material/styles';
+import Alert from '@mui/material/Alert';
+import {useCryptoProviders} from '../CreatePayload/CryptoProviderContext';
+import {getBuildCryptoError} from '../CreatePayload/CryptoProviderChoices';
 
  const create_payload = gql`
  mutation createPayloadMutation($payload: String!) {
@@ -33,6 +36,8 @@ import {useTheme} from '@mui/material/styles';
 
 
 export function Step5Build(props){
+    const cryptoProviders = useCryptoProviders();
+    const cryptoError = getBuildCryptoError(props.buildOptions, cryptoProviders);
     const theme = useTheme();
     const [fromNow, setFromNow] = React.useState( (getSkewedNow().toISOString()));
     const [filename, setFilename] = React.useState("");
@@ -84,6 +89,10 @@ export function Step5Build(props){
         setDescription(value);
     }
     const finished = async () => {
+        if(cryptoError){
+            snackActions.warning(cryptoError);
+            return;
+        }
         let buildParameters = [];
         let params = GetGroupedParameters({
             buildParameters: props.buildOptions[1]["parameters"],
@@ -246,11 +255,13 @@ export function Step5Build(props){
             </div>
 
             <div className="mythic-create-flow-footer flex-none">
+                {cryptoError && <Alert severity="error">{cryptoError}</Alert>}
                 <CreatePayloadNavigationButtons
                     first={props.first}
                     last={props.last}
                     canceled={canceled}
                     finished={finished}
+                    disableNext={Boolean(cryptoError)}
                 />
                 <br/><br/>
             </div>

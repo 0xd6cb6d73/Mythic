@@ -47,6 +47,7 @@ query getPayloadTypesBuildParametersQuery($payload_id: Int!) {
         agent_type
         note
         supports_dynamic_loading
+        supported_crypto_schemes
         supports_multiple_c2_in_build
         supports_multiple_c2_instances_in_build
         c2_parameter_deviations
@@ -58,6 +59,7 @@ query getPayloadTypesBuildParametersQuery($payload_id: Int!) {
             id
             name
             parameter_type
+            crypto_type
             randomize
             required
             verifier_regex
@@ -175,6 +177,7 @@ export function Step1SelectOS(props){
                     description: data.payload_by_pk.payloadtype.note,
                     file_extension: data.payload_by_pk.payloadtype.file_extension,
                     supports_dynamic_loading: data.payload_by_pk.payloadtype.supports_dynamic_loading,
+                    supported_crypto_schemes: data.payload_by_pk.payloadtype.supported_crypto_schemes || [],
                     supports_multiple_c2_in_build: data.payload_by_pk.payloadtype.supports_multiple_c2_in_build,
                     supports_multiple_c2_instances_in_build: data.payload_by_pk.payloadtype.supports_multiple_c2_instances_in_build,
                     c2_parameter_deviations: data.payload_by_pk.payloadtype.c2_parameter_deviations,

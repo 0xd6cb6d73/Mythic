@@ -8,12 +8,19 @@ import {Step3SelectPayload} from './Step3SelectPayload';
 import {Step5Build} from './Step5Build';
 import { snackActions } from '../../utilities/Snackbar';
 import {MythicPageBody} from "../../MythicComponents/MythicPageBody";
+import {CryptoProviderDiscovery, useCryptoProviders} from '../CreatePayload/CryptoProviderContext';
+import {getBuildCryptoError} from '../CreatePayload/CryptoProviderChoices';
 
 function getSteps(){
     return ['Select Target OS', 'Payload Type', 'Select Payload', 'Build']
 }
 
 export function CreatePayloadWrapper(props){
+    return <CryptoProviderDiscovery><CreatePayloadWrapperWizard {...props} /></CryptoProviderDiscovery>;
+}
+
+function CreatePayloadWrapperWizard(props){
+    const cryptoProviders = useCryptoProviders();
     const me = props.me;
     const noOperation = (me?.user?.current_operation_id || 0) > 0 ? false : true;
     const [payload, setPayload] = React.useState({}); 
@@ -37,6 +44,11 @@ export function CreatePayloadWrapper(props){
         handleNext();
     }
     const handleStepData = (stepData, clearNextPreviousData) => {
+        const cryptoError = activeStep === 1 ? getBuildCryptoError({1: stepData}, cryptoProviders) : "";
+        if(cryptoError){
+            snackActions.warning(cryptoError);
+            return;
+        }
         let newPayload = {...payload, [activeStep]: stepData};
         if(clearNextPreviousData){
             newPayload[activeStep+1] = undefined;

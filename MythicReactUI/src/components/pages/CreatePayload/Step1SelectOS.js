@@ -72,6 +72,7 @@ query getPayloadTypesBuildParametersQuery($payloadtype: String!) {
     agent_type
     note
     supports_dynamic_loading
+    supported_crypto_schemes
     supports_multiple_c2_in_build
     supports_multiple_c2_instances_in_build
     c2_parameter_deviations
@@ -83,6 +84,7 @@ query getPayloadTypesBuildParametersQuery($payloadtype: String!) {
         id
         name
         parameter_type
+        crypto_type
         randomize
         required
         verifier_regex
@@ -113,6 +115,7 @@ query getBuildParameterInstanceQuery($name: String!, $payloadtype: String!) {
       id
       name
       parameter_type
+      crypto_type
       randomize
       required
       verifier_regex
@@ -150,6 +153,7 @@ query getPayloadTypesBuildParametersQuery($payload_id: Int!) {
         agent_type
         note
         supports_dynamic_loading
+        supported_crypto_schemes
         supports_multiple_c2_in_build
         supports_multiple_c2_instances_in_build
         c2_parameter_deviations
@@ -161,6 +165,7 @@ query getPayloadTypesBuildParametersQuery($payload_id: Int!) {
             id
             name
             parameter_type
+            crypto_type
             randomize
             required
             verifier_regex
@@ -183,6 +188,7 @@ query getPayloadTypesBuildParametersQuery($payload_id: Int!) {
           id
           name
           parameter_type
+          crypto_type
           randomize
           required
           verifier_regex
@@ -414,6 +420,7 @@ export function Step1SelectOS(props){
                     description: data.payload_by_pk.payloadtype.note,
                     file_extension: data.payload_by_pk.payloadtype.file_extension,
                     supports_dynamic_loading: data.payload_by_pk.payloadtype.supports_dynamic_loading,
+                    supported_crypto_schemes: data.payload_by_pk.payloadtype.supported_crypto_schemes || [],
                     supports_multiple_c2_in_build: data.payload_by_pk.payloadtype.supports_multiple_c2_in_build,
                     supports_multiple_c2_instances_in_build: data.payload_by_pk.payloadtype.supports_multiple_c2_instances_in_build,
                     c2_parameter_deviations: data.payload_by_pk.payloadtype.c2_parameter_deviations,
@@ -739,6 +746,7 @@ export const ConfigureBuildParameters = (
                     "file_extension": data.payloadtype[0].file_extension,
                     "agent_type": data.payloadtype[0].agent_type,
                     "supports_dynamic_loading": data.payloadtype[0].supports_dynamic_loading,
+                    "supported_crypto_schemes": data.payloadtype[0].supported_crypto_schemes || [],
                     "description": data.payloadtype[0].note,
                     "supports_multiple_c2_in_build": data.payloadtype[0].supports_multiple_c2_in_build,
                     "supports_multiple_c2_instances_in_build": data.payloadtype[0].supports_multiple_c2_instances_in_build,
@@ -845,6 +853,7 @@ export const ConfigureBuildParameters = (
                 </section>
                 <section className="mythic-create-section p-6 flex flex-column gap-5 mythic-create-section-scroll min-h-0 min-w-0 overflow-hidden overflow-auto rounded bg-surface-muted border-subtle">
                     <CreatePayloadBuildParametersTable onChange={onChange} buildParameters={payloadTypeParameters} os={os}
+                    supported_crypto_schemes={payloadTypeConfigPieces.supported_crypto_schemes}
                     payload_type={selectedPayloadType} instance_name={selectedBuildParameterInstance}/>
                 </section>
             </div>

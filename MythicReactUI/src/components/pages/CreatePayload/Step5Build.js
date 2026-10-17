@@ -13,6 +13,9 @@ import {ConfigurationSummary, GetGroupedParameters} from "./Step1SelectOS";
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline';
 import {MythicStyledTooltip} from "../../MythicComponents/MythicStyledTooltip";
+import Alert from '@mui/material/Alert';
+import {useCryptoProviders} from './CryptoProviderContext';
+import {getBuildCryptoError} from './CryptoProviderChoices';
 
 const create_payload = gql`
  mutation createPayloadMutation($payload: String!) {
@@ -24,6 +27,8 @@ const create_payload = gql`
 }
  `;
 export function Step5Build(props){
+    const cryptoProviders = useCryptoProviders();
+    const cryptoError = getBuildCryptoError(props.buildOptions, cryptoProviders);
     const [fromNow, setFromNow] = React.useState( (getSkewedNow().toISOString()));
     const [filename, setFilename] = React.useState("");
     const [description, setDescription] = React.useState("");
@@ -61,6 +66,10 @@ export function Step5Build(props){
         setDescription(value);
     }
     const finished = async () => {
+        if(cryptoError){
+            snackActions.warning(cryptoError);
+            return;
+        }
         let buildParameters = [];
         let params = GetGroupedParameters({
             buildParameters: props.buildOptions[1]["parameters"],
@@ -298,11 +307,13 @@ export function Step5Build(props){
             </div>
 
             <div className="mythic-create-flow-footer flex-none">
+                {cryptoError && <Alert severity="error">{cryptoError}</Alert>}
                 <CreatePayloadNavigationButtons
                     first={props.first}
                     last={props.last}
                     canceled={canceled}
                     finished={finished}
+                    disableNext={Boolean(cryptoError)}
                 />
                 <br/><br/>
             </div>

@@ -9,12 +9,19 @@ import {Step5Build} from './Step5Build';
 import Typography from '@mui/material/Typography';
 import { snackActions } from '../../utilities/Snackbar';
 import {MythicPageBody} from "../../MythicComponents/MythicPageBody";
+import {CryptoProviderDiscovery, useCryptoProviders} from './CryptoProviderContext';
+import {getBuildCryptoError} from './CryptoProviderChoices';
 
 function getSteps(){
     return ['Select Target OS', 'Configure Payload', 'Select Commands', 'Select C2 Profiles', 'Build']
 }
 
 export function CreatePayload(props){
+    return <CryptoProviderDiscovery><CreatePayloadWizard {...props} /></CryptoProviderDiscovery>;
+}
+
+function CreatePayloadWizard(props){
+    const cryptoProviders = useCryptoProviders();
     const me = props.me;
     const noOperation = (me?.user?.current_operation_id || 0) > 0 ? false : true;
     const [payload, setPayload] = React.useState({}); 
@@ -40,6 +47,12 @@ export function CreatePayload(props){
         handleNext();
       }
       const handleStepData = (stepData, clearNextPreviousData) => {
+        const cryptoError = activeStep === 1 ? getBuildCryptoError({1: stepData}, cryptoProviders) :
+            activeStep === 3 ? getBuildCryptoError({1: {...payload[1], parameters: []}, 3: stepData}, cryptoProviders) : "";
+        if(cryptoError){
+            snackActions.warning(cryptoError);
+            return;
+        }
         let newPayload = {...payload, [activeStep]: stepData};
         if(clearNextPreviousData){
             newPayload[activeStep+1] = undefined;
