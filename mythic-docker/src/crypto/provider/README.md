@@ -4,6 +4,8 @@ This internal API lets a separately deployed crypto service implement a protocol
 
 The Go contract is [contract.go](contract.go), the durable-storage types are [state_types.go](state_types.go), and [schema.json](schema.json) describes the JSON messages. The Go validators and this document define constraints that JSON Schema cannot express, including matching a response to its request. API v1 implements a single registration round trip. It does not implement a particular native cryptographic library.
 
+`schema_conformance_test.go` checks shared valid and invalid examples against both JSON Schema and Go validation. Request-dependent response requirements and decoded UTF-8 byte limits remain Go checks: JSON Schema sees one message at a time and counts string characters rather than bytes.
+
 ## Registration and selection
 
 Register the consuming container with `type: "crypto"` and `crypto_capabilities`:
@@ -20,6 +22,8 @@ Register the consuming container with `type: "crypto"` and `crypto_capabilities`
 ```
 
 `session_persistence` is `durable` or `volatile`. The advertised maximum must be positive and at most 67,108,864 decoded bytes. Retention is a positive number of seconds. Scheme names are unique, start with an ASCII letter or digit, and contain at most 128 ASCII letters, digits, underscores, dots, or hyphens.
+
+Persistence and retention describe provider guarantees. They do not configure database expiry or connect callback deletion to native session revocation. Mythic retains its exchange ledger and provider storage records; this API currently has no pruning mechanism. The provider must document its own admission limits and what happens when they are reached. Mythic checks the registered message maximum before invoking `begin_session`, `open`, or `seal`; updating provider registration refreshes cached limits.
 
 Select the provider explicitly with `provider:<registered-container-name>:<scheme>`, for example `provider:example-service:example`. Existing built-in selections retain their existing meaning. Invalid selections beginning with `provider:` are rejected.
 
@@ -53,6 +57,8 @@ References have a 1,024-byte maximum at this boundary. Request/response messages
 
 Responses include `api_version`, the request's exact `request_id`, `operation_scope_id`, `auth_context`, and `success`. A failed response contains `error: {"code": "<provider-code>", "message": "<description>"}`. A successful response must omit `error`. Mythic rejects replies with mismatched request, operation, or authorization context. For `open`, `seal`, and `revoke_session`, any returned nonempty profile/session/state references must also match the request. Providers must authorize every profile/session reference within the requested operation; the transient transport context does not establish ownership of arbitrary references.
 
+Failure `code` is required; a human-readable `message` is optional. Mythic validates requests and correlated responses once at its provider invocation boundary. Providers and the storage RPC endpoint validate their own incoming requests independently.
+
 Failures may include `error.outcome: "rejected"` or `"unresolved"`. `rejected` explicitly promises that continuing the session is safe and this failure leaves no unresolved cryptographic effect. `unresolved` means the caller cannot safely assume that promise. For `open` and `seal`, an omitted or empty outcome also means unresolved. Other nonempty outcomes are invalid. A failure report does not establish that native work had no effect unless it explicitly makes that promise.
 
 | Method | Required request data | Successful response |
@@ -64,6 +70,8 @@ Failures may include `error.outcome: "rejected"` or `"unresolved"`. `rejected` e
 | `seal` | `session_ref`, `namespace`, plaintext `message`; state/profile references from the binding | Opaque encrypted `message` |
 | `get_operation` | `lookup_request_id` | The prior business result, correlated to the current lookup request |
 | `revoke_session` | `session_ref`, `namespace`; state reference from the binding | Provider-specific revocation result |
+
+Mythic currently invokes `prepare_profile`, `begin_session`, `open`, and `seal`. `describe`, `get_operation`, and `revoke_session` remain wire-compatible extension methods for existing provider implementations; Mythic does not call them for discovery, retry recovery, callback deactivation, or cleanup. Capabilities come from container sync and recovery retries the original request. Storage `get_result` is a separate method used to reconcile durable commits.
 
 `agent_config` contains arbitrary provider-defined bytes; its wire representation is standard base64. Mythic stores the raw bytes and projects them into builder JSON as the base64 string `provider_config`. A builder decodes that string to recover the exact configuration bytes, then interprets them according to its selected provider. `enc_key` and `dec_key` are optional compatibility fields; their bytes are also base64 encoded. Providers decide whether they are needed. Mythic stores profile/session references and extension JSON without interpreting native cryptographic state.
 
@@ -79,7 +87,11 @@ The same completed business result may be replayed with renewed transient author
 
 Providers own native state serialization, failure fencing, and session recovery. Mythic passes correlated `open` and `seal` requests and propagates their outcomes; an RPC acknowledgement failure does not impose a server-owned cryptographic session policy. Providers must retain completed results for exact request retries.
 
-For callback request/reply traffic, Mythic retains the exact sealed response keyed by the session binding, routing UUID, and incoming ciphertext digest. An identical transport retry returns that response without opening or dispatching the message again. Mythic saves the exact serialized application response before sealing, so a lost provider acknowledgement can resume the same seal request after restart. A short database transaction admits one application dispatch per route across Mythic backends. Competing authenticated packets receive a retryable dispatch conflict; the provider retains their `open` results under their original request IDs. No database transaction is held across provider RPC or application dispatch. A crash after the dispatch claim but before saving the application response leaves that exchange unresolved; Mythic cannot safely repeat application effects and rejects new packets on that route. This ledger does not provide exactly-once task execution across process crashes.
+For callback request/reply traffic, Mythic retains the exact sealed response keyed by the session binding, routing UUID, and incoming ciphertext digest. An identical transport retry returns that response without opening or dispatching the message again. Mythic saves the logical application response, including known application errors, before translation. A translator timeout can therefore resume from the saved response without repeating application effects. Mythic then saves the exact serialized or translated bytes before sealing, so a lost provider acknowledgement can resume the same seal request after restart. Saving those bytes discards the logical response; atomically saving the final ciphertext discards the plaintext. Completed exchanges retain ciphertext and routing/deduplication metadata, not plaintext responses.
+
+A short database transaction admits one application dispatch per route across Mythic backends, including an authenticated initial check-in and its piggybacked messages. Competing authenticated packets receive a retryable dispatch conflict; the provider retains their `open` results under their original request IDs. No database transaction or local exchange lock is held across application dispatch. A crash or failed persistence after the dispatch claim but before saving the logical application response leaves that exchange unresolved; Mythic cannot safely repeat application effects and rejects new packets on that route. This ledger does not provide exactly-once task execution across process crashes.
+
+Exchange records include their creation time, but completed ciphertext and immutable provider results are retained without automatic expiry. This is an explicit recovery policy, not a claim of bounded sustained-load storage. Deleting an exchange while its provider result is still replayable could dispatch the same application message again. Deleting storage results independently also cannot compact the provider's opaque request index or safely retire its native state. Completing an operation does not irreversibly retire its callbacks or prove that a provider-defined state key belongs exclusively to that operation. Safe replay expiry and owner disposal therefore require coordinated lifecycle semantics; this version does not prune records on a timer or on operation completion. Provider admission quotas can stop new traffic before storage grows indefinitely within an owner, and must be sized and monitored accordingly.
 
 Delegated/P2P traffic through a polling egress uses the same provider registration, `open`, and `seal` operations as direct traffic. Each callback keeps its own opaque session binding, independently of the egress callback's encryption. Provider-managed P2P callbacks can therefore traverse an AESPSK or provider-managed polling egress, and provider-managed polling egress callbacks can relay either kind of P2P callback. TCP P2P through HTTP polling egress exercises all four combinations. Mythic retains its ordinary nested delegate framing and callback UUID transitions.
 

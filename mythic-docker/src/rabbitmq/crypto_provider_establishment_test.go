@@ -44,7 +44,7 @@ func TestCryptoProviderFramePreservesOpaqueBytes(t *testing.T) {
 func establishmentProviderTestDB(t *testing.T, width int) (*sqlx.DB, *cachedUUIDInfo) {
 	t.Helper()
 	db := callbackProviderTestDB(t)
-	previousDB, previousCall, previousNotify := database.DB, callCryptoProvider, notifyCryptoProviderCallbackCreated
+	previousDB, previousCall, previousNotify, previousTranslate := database.DB, callCryptoProvider, notifyCryptoProviderCallbackCreated, translateCryptoProviderResponse
 	database.DB = db
 	cachedUUIDInfoMapMutex.Lock()
 	previousCache := cachedUUIDInfoMap
@@ -52,6 +52,7 @@ func establishmentProviderTestDB(t *testing.T, width int) (*sqlx.DB, *cachedUUID
 	cachedUUIDInfoMapMutex.Unlock()
 	t.Cleanup(func() {
 		database.DB, callCryptoProvider, notifyCryptoProviderCallbackCreated = previousDB, previousCall, previousNotify
+		translateCryptoProviderResponse = previousTranslate
 		cachedUUIDInfoMapMutex.Lock()
 		cachedUUIDInfoMap = previousCache
 		cachedUUIDInfoMapMutex.Unlock()
@@ -64,9 +65,11 @@ func establishmentProviderTestDB(t *testing.T, width int) (*sqlx.DB, *cachedUUID
 			ADD COLUMN agent_config bytea, ADD COLUMN enc_key bytea, ADD COLUMN dec_key bytea;
 		ALTER TABLE staginginfo ADD COLUMN session_id text, ADD COLUMN crypto_type text, ADD COLUMN enc_key bytea, ADD COLUMN dec_key bytea, ADD CONSTRAINT stage_route_unique UNIQUE(staging_uuid);
 		ALTER TABLE crypto_provider_exchange ADD COLUMN input_digest text, ADD COLUMN response bytea, ADD COLUMN session_binding_id uuid, ADD COLUMN seal_input bytea,
+			ADD COLUMN dispatch_response bytea, ADD COLUMN created_at timestamptz NOT NULL DEFAULT now(),
 			ADD CONSTRAINT exchange_packet_unique UNIQUE(binding_id,route_uuid,input_digest);
 		ALTER TABLE callback ADD COLUMN last_checkin timestamptz NOT NULL DEFAULT now(), ADD COLUMN trigger_on_checkin_after_time integer NOT NULL DEFAULT 0;
-		CREATE TABLE consuming_container (id integer PRIMARY KEY, name text, type text, deleted boolean);
+		CREATE TABLE consuming_container (id integer PRIMARY KEY, name text, type text, deleted boolean,
+			crypto_capabilities jsonb NOT NULL DEFAULT '{"max_message_bytes":67108864}');
 		CREATE TABLE operation (id integer PRIMARY KEY, complete boolean, name text, webhook text, channel text);
 		CREATE TABLE operator (id integer PRIMARY KEY, username text);
 		CREATE TABLE payloadtype (id integer PRIMARY KEY, name text, mythic_encrypts boolean, translation_container_id integer,
@@ -74,9 +77,10 @@ func establishmentProviderTestDB(t *testing.T, width int) (*sqlx.DB, *cachedUUID
 		CREATE TABLE payload (id integer PRIMARY KEY, uuid uuid, operator_id integer, description text, callback_alert boolean, os text,
 			operation_id integer, payload_type_id integer, deleted boolean DEFAULT false, callback_allowed boolean DEFAULT true);
 		CREATE TABLE c2profileparameters (id integer PRIMARY KEY, c2_profile_id integer, crypto_type boolean);
-		CREATE TABLE buildparameterinstance (id serial PRIMARY KEY, payload_id integer, enc_key bytea, dec_key bytea,
+		CREATE TABLE buildparameter (id integer PRIMARY KEY, crypto_type boolean);
+		CREATE TABLE buildparameterinstance (id serial PRIMARY KEY, payload_id integer, build_parameter_id integer, enc_key bytea, dec_key bytea,
 			value text, crypto_provider_binding_id uuid);
-		INSERT INTO consuming_container VALUES (1,'test-provider','crypto',false);
+		INSERT INTO consuming_container (id,name,type,deleted) VALUES (1,'test-provider','crypto',false);
 		INSERT INTO operation VALUES (17,false,'test operation','','');
 		INSERT INTO operator VALUES (7,'operator');
 		INSERT INTO c2profile VALUES (31,'test-c2',true);
@@ -205,15 +209,12 @@ func TestCryptoProviderEstablishmentRetryAndCallbackRecovery(t *testing.T) {
 			if err != nil || !bytes.HasPrefix(plainFrame, prefix) {
 				t.Fatalf("check-in response changed the incoming staging envelope: %x, %v", plainFrame, err)
 			}
-			if _, err := db.Exec(`UPDATE crypto_provider_exchange SET response=NULL WHERE binding_id=$1`, stage); err != nil {
-				t.Fatal(err)
-			}
 			InvalidateAllCachedUUIDInfo()
 			recovered := recursiveProcessAgentMessage(&AgentMessageRawInput{Base64Message: &stagedInput, C2Profile: "test-c2"})
 			if recovered.Err != nil || recovered.NewCallbackUUID != checkedIn.NewCallbackUUID || !bytes.Equal(recovered.Message, checkedIn.Message) || notifications != 1 {
 				t.Fatalf("callback recovery changed the result: err=%v callback=%s notifications=%d", recovered.Err, recovered.NewCallbackUUID, notifications)
 			}
-			if calls[provider.Open] != 1 || calls[provider.Seal] != 2 {
+			if calls[provider.Open] != 1 || calls[provider.Seal] != 1 {
 				t.Fatalf("recovery did not retrieve original crypto results: %v", calls)
 			}
 			var callbacks, stages int
@@ -300,8 +301,8 @@ func TestCryptoProviderCheckinRecoversLostSealWithoutReopening(t *testing.T) {
 	if err := db.Get(&pending, `SELECT seal_input,response FROM crypto_provider_exchange WHERE binding_id=$1 AND route_uuid=$1`, stage); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(pending.SealInput, sealPlaintext) || !bytes.Equal(pending.Response, recovered.Message) {
-		t.Fatalf("successful recovery did not retain the original exchange: %+v", pending)
+	if pending.SealInput != nil || !bytes.Equal(pending.Response, recovered.Message) {
+		t.Fatalf("successful recovery must retain ciphertext and discard plaintext: %+v", pending)
 	}
 }
 

@@ -36,7 +36,8 @@ func TestCryptoProviderCallbackCreationChecksSelectedRoute(t *testing.T) {
 	database.DB = db
 	t.Cleanup(func() { database.DB = previous })
 	if _, err := db.Exec(`CREATE TABLE buildparameterinstance(payload_id integer,crypto_provider_binding_id uuid);
-		INSERT INTO c2profile VALUES (1,'custom',false),(2,'legacy',false);
+		INSERT INTO c2profile VALUES (1,'custom',false),(2,'legacy',false),(3,'unconfigured',false);
+		INSERT INTO payloadc2profiles VALUES (23,1),(23,2);
 		INSERT INTO c2profileparametersinstance(payload_id,c2_profile_id,crypto_provider_binding_id)
 		VALUES (23,1,'ce42249c-2f93-4fad-b7c6-a3d688d2ba79'),(23,2,NULL);`); err != nil {
 		t.Fatal(err)
@@ -46,6 +47,12 @@ func TestCryptoProviderCallbackCreationChecksSelectedRoute(t *testing.T) {
 		if err != nil || managed != want {
 			t.Fatalf("route=%q managed=%v err=%v; want=%v", route, managed, err, want)
 		}
+	}
+	if _, err := payloadRouteUsesCryptoProvider(23, "unconfigured"); err == nil {
+		t.Fatal("unconfigured route bypassed the provider callback guard")
+	}
+	if managed, err := payloadRouteUsesCryptoProvider(24, "unconfigured"); err != nil || managed {
+		t.Fatalf("legacy-only payload route handling changed: managed=%v err=%v", managed, err)
 	}
 }
 

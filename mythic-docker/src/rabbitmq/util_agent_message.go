@@ -508,6 +508,10 @@ func processAgentMessageContent(agentMessageInput *AgentMessageRawInput, uuidInf
 	}
 	if _, ok := decryptedMessage[CALLBACK_MESSAGE_KEY_DELEGATES]; ok {
 		// this means we have some delegate messages to process recursively
+		parentCallbackUUID := instanceResponse.OuterUuid
+		if uuidInfo.CryptoProviderBindingID != "" && instanceResponse.NewCallbackUUID != "" {
+			parentCallbackUUID = instanceResponse.NewCallbackUUID
+		}
 		delegates := []delegateMessage{}
 		if err := mapstructure.Decode(decryptedMessage[CALLBACK_MESSAGE_KEY_DELEGATES], &delegates); err != nil {
 			logging.LogError(err, "Failed to parse delegate messages")
@@ -537,7 +541,7 @@ func processAgentMessageContent(agentMessageInput *AgentMessageRawInput, uuidInf
 						newResponse.MythicUuid = delegateResponse.NewCallbackUUID
 						newResponse.NewUuid = delegateResponse.NewCallbackUUID
 						// we got an implicit new callback relationship, mark it
-						go callbackGraph.AddByAgentIds(instanceResponse.OuterUuid, delegateResponse.NewCallbackUUID, delegate.C2ProfileName, uuidInfo.OperationID)
+						go callbackGraph.AddByAgentIds(parentCallbackUUID, delegateResponse.NewCallbackUUID, delegate.C2ProfileName, uuidInfo.OperationID)
 					} else {
 						if delegateResponse.OuterUuid != "" && delegateResponse.OuterUuid != delegate.SuppliedUuid {
 							newResponse.MythicUuid = delegateResponse.OuterUuid
@@ -545,7 +549,7 @@ func processAgentMessageContent(agentMessageInput *AgentMessageRawInput, uuidInf
 						} else {
 							newResponse.SuppliedUuid = delegate.SuppliedUuid
 						}
-						go callbackGraph.AddByAgentIds(instanceResponse.OuterUuid, delegateResponse.OuterUuid, delegate.C2ProfileName, uuidInfo.OperationID)
+						go callbackGraph.AddByAgentIds(parentCallbackUUID, delegateResponse.OuterUuid, delegate.C2ProfileName, uuidInfo.OperationID)
 					}
 					//go callbackGraph.AddByAgentIds(outerUUID, delegateResponse.OuterUuid, delegate.C2ProfileName)
 					delegateResponses = append(delegateResponses, newResponse)
@@ -889,6 +893,9 @@ func LookupEncryptionData(c2profile string, messageUUID string, updateCheckinTim
 		JOIN payloadtype on payload.payload_type_id = payloadtype.id
 		WHERE payload.uuid=$1`, messageUUID); err == nil {
 		// we're looking at a payload message
+		if err = validatePayloadCryptoProviderRoute(payload.ID, c2profile); err != nil {
+			return &newCache, err
+		}
 		newCache.UUID = messageUUID
 		newCache.UUIDType = UUIDTYPEPAYLOAD
 		newCache.CallbackAllowedFromPayload = payload.CallbackAllowed
@@ -938,9 +945,11 @@ func LookupEncryptionData(c2profile string, messageUUID string, updateCheckinTim
 		}
 		payloadCryptoParams := []databaseStructs.Buildparameterinstance{}
 		if err = database.DB.Select(&payloadCryptoParams, `SELECT
-			enc_key, dec_key, value,crypto_provider_binding_id
-			FROM buildparameterinstance
-			WHERE (dec_key IS NOT NULL OR crypto_provider_binding_id IS NOT NULL OR value LIKE 'provider:%') AND payload_id=$1`, payload.ID); err != nil {
+			i.enc_key, i.dec_key, i.value,i.crypto_provider_binding_id
+			FROM buildparameterinstance i
+			LEFT JOIN buildparameter p ON p.id=i.build_parameter_id
+			WHERE (i.dec_key IS NOT NULL OR i.crypto_provider_binding_id IS NOT NULL OR
+			       (p.crypto_type=true AND i.value LIKE 'provider:%')) AND i.payload_id=$1`, payload.ID); err != nil {
 			return &newCache, err
 		}
 		if len(payloadCryptoParams) == 0 {

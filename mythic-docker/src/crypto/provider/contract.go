@@ -96,6 +96,8 @@ type Binding struct {
 	AgentConfig      []byte          `json:"agent_config,omitempty" db:"agent_config"`
 	EncKey           *[]byte         `json:"enc_key,omitempty" db:"enc_key"`
 	DecKey           *[]byte         `json:"dec_key,omitempty" db:"dec_key"`
+	// MaxMessageBytes comes from current provider registration, not opaque state.
+	MaxMessageBytes int `json:"-" db:"max_message_bytes"`
 }
 
 // Request contains only application routing claims and opaque provider input.
@@ -134,6 +136,16 @@ func (r Request) Validate() error {
 	if len(r.ProviderJSON) > 0 && !json.Valid(r.ProviderJSON) {
 		return errors.New("invalid provider JSON")
 	}
+	if r.Scheme != "" && !identifier.MatchString(r.Scheme) {
+		return errors.New("invalid crypto scheme")
+	}
+	for _, value := range []string{r.PayloadUUID, r.NextUUID, r.LookupRequestID} {
+		if value != "" {
+			if id, err := uuid.Parse(value); err != nil || id.String() != value {
+				return errors.New("invalid crypto request UUID")
+			}
+		}
+	}
 	switch r.Method {
 	case Describe:
 	case PrepareProfile:
@@ -144,18 +156,16 @@ func (r Request) Validate() error {
 		if r.ProfileRef == "" || len(r.Message) == 0 {
 			return errors.New("profile and initial message are required")
 		}
-		for _, value := range []string{r.PayloadUUID, r.NextUUID} {
-			if id, err := uuid.Parse(value); err != nil || id.String() != value {
-				return errors.New("invalid crypto routing claim")
-			}
+		if r.PayloadUUID == "" || r.NextUUID == "" {
+			return errors.New("crypto routing claims are required")
 		}
 	case Open, Seal, RevokeSession:
 		if r.SessionRef == "" || r.Namespace == "" {
 			return errors.New("crypto session and namespace are required")
 		}
 	case GetOperation:
-		if _, err := uuid.Parse(r.LookupRequestID); err != nil {
-			return errors.New("invalid lookup request ID")
+		if r.LookupRequestID == "" {
+			return errors.New("lookup request ID is required")
 		}
 	default:
 		return errors.New("unknown crypto provider method")

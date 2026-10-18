@@ -20,9 +20,6 @@ import (
 var callCryptoProvider = sendCryptoProviderRequest
 
 func sendCryptoProviderRequest(name string, request provider.Request) (*provider.Response, error) {
-	if err := request.Validate(); err != nil {
-		return nil, err
-	}
 	route, err := provider.RoutingKey(name)
 	if err != nil {
 		return nil, err
@@ -30,10 +27,6 @@ func sendCryptoProviderRequest(name string, request provider.Request) (*provider
 	body, err := json.Marshal(request)
 	if err != nil {
 		return nil, err
-	}
-	authContext, err := ValidateRabbitMQAuthContextToken(request.AuthContext)
-	if err != nil || authContext.ContainerName != name || authContext.OperationID != request.OperationScopeID {
-		return nil, errors.New("crypto provider authorization context mismatch")
 	}
 	headers := amqp.Table{MYTHIC_RABBITMQ_AUTH_CONTEXT_HEADER: request.AuthContext}
 	responseBytes, err := RabbitMQConnection.SendRPCMessage(MYTHIC_EXCHANGE, route, body, false, RPC_RETRY_POLICY_RETRY_ON_TIMEOUT, headers)
@@ -47,9 +40,6 @@ func sendCryptoProviderRequest(name string, request provider.Request) (*provider
 	if err = json.Unmarshal(responseBytes, &response); err != nil {
 		return nil, errors.New("invalid crypto provider response")
 	}
-	if err = response.Validate(request); err != nil {
-		return nil, err
-	}
 	return &response, nil
 }
 
@@ -59,6 +49,10 @@ func invokeCryptoProvider(name string, request provider.Request) (*provider.Resp
 	defer InvalidateRabbitMQAuthContextToken(request.AuthContext)
 	if err := request.Validate(); err != nil {
 		return nil, err
+	}
+	authContext, err := ValidateRabbitMQAuthContextToken(request.AuthContext)
+	if err != nil || authContext.ContainerName != name || authContext.OperationID != request.OperationScopeID {
+		return nil, errors.New("crypto provider authorization context mismatch")
 	}
 	response, err := callCryptoProvider(name, request)
 	if err != nil {
@@ -78,13 +72,28 @@ func invokeCryptoProvider(name string, request provider.Request) (*provider.Resp
 
 func loadCryptoProviderBinding(id string, operationID int) (*provider.Binding, error) {
 	var binding provider.Binding
-	err := database.DB.Get(&binding, `SELECT b.id,b.provider_id,c.name provider_name,b.operation_id,b.scheme,b.profile_ref,b.session_ref,b.namespace,b.state_id,b.provider_json,b.agent_config,b.enc_key,b.dec_key
+	err := database.DB.Get(&binding, `SELECT b.id,b.provider_id,c.name provider_name,b.operation_id,b.scheme,b.profile_ref,b.session_ref,b.namespace,b.state_id,b.provider_json,b.agent_config,b.enc_key,b.dec_key,
+		(c.crypto_capabilities->>'max_message_bytes')::integer max_message_bytes
 		FROM crypto_provider_binding b JOIN consuming_container c ON c.id=b.provider_id
 		WHERE b.id=$1 AND b.operation_id=$2 AND c.type='crypto' AND NOT c.deleted`, id, operationID)
 	if err != nil {
 		return nil, errors.New("crypto provider binding unavailable")
 	}
+	if binding.MaxMessageBytes < 1 || binding.MaxMessageBytes > provider.MaxMessageBytes {
+		return nil, errors.New("invalid crypto provider message limit")
+	}
 	return &binding, nil
+}
+
+func validateCryptoProviderMessageSize(binding *provider.Binding, message []byte) error {
+	limit := provider.MaxMessageBytes
+	if binding != nil && binding.MaxMessageBytes > 0 {
+		limit = binding.MaxMessageBytes
+	}
+	if len(message) > limit {
+		return errors.New("crypto provider message exceeds advertised limit")
+	}
+	return nil
 }
 
 func requestForBinding(binding *provider.Binding, method string, message []byte, requestID string, authContext RabbitMQAuthContext) (provider.Request, error) {
@@ -113,6 +122,9 @@ func cryptoProviderAct(binding *provider.Binding, action string, message []byte,
 	}
 	if binding == nil || binding.SessionRef == "" || binding.ID == "" {
 		return nil, errors.New("crypto provider session has not been established")
+	}
+	if err := validateCryptoProviderMessageSize(binding, message); err != nil {
+		return nil, err
 	}
 	request, err := requestForBinding(binding, method, message, requestID, authContext)
 	if err != nil {
@@ -162,9 +174,6 @@ func PrepareCryptoProviderKeys(value string, operationID int, authContext Rabbit
 	}
 	response, err := invokeCryptoProvider(name, request)
 	if err != nil {
-		return mythicCrypto.CryptoKeys{}, err
-	}
-	if err = response.Validate(request); err != nil {
 		return mythicCrypto.CryptoKeys{}, err
 	}
 	config := response.AgentConfig
@@ -328,6 +337,9 @@ func selectCryptoProviderBinding(candidates []cryptoProviderCandidate) (string, 
 // session through legacy key inference. The selected transport is considered
 // independently so payloads can still have unrelated legacy C2 routes.
 func payloadRouteUsesCryptoProvider(payloadID int, c2 string) (bool, error) {
+	if err := validatePayloadCryptoProviderRoute(payloadID, c2); err != nil {
+		return false, err
+	}
 	var managed bool
 	err := database.DB.Get(&managed, `SELECT EXISTS (
 		SELECT 1 FROM buildparameterinstance WHERE payload_id=$1 AND crypto_provider_binding_id IS NOT NULL

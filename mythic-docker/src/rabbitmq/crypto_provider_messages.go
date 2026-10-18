@@ -3,6 +3,7 @@ package rabbitmq
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 
 	"github.com/its-a-feature/Mythic/database"
@@ -70,7 +71,7 @@ func processCryptoProviderCallback(input *AgentMessageRawInput, info *cachedUUID
 
 func processCryptoProviderCallbackWithHandler(input *AgentMessageRawInput, info *cachedUUIDInfo, body []byte, width int, auth RabbitMQAuthContext, dispatch func(*AgentMessageRawInput, *cachedUUIDInfo, map[string]interface{}, *recursiveProcessAgentMessageResponse) map[string]interface{}) recursiveProcessAgentMessageResponse {
 	result := recursiveProcessAgentMessageResponse{
-		OuterUuid: info.UUID, OuterUuidIsCallback: true,
+		OuterUuid: info.UUID, OuterUuidIsCallback: info.UUIDType == UUIDTYPECALLBACK,
 		TrackingID: input.TrackingID, AgentUUIDSize: width,
 	}
 	if width != info.PayloadTypeMessageUUIDLength || auth.OperationID != info.OperationID {
@@ -113,6 +114,10 @@ func processCryptoProviderCallbackWithHandler(input *AgentMessageRawInput, info 
 			result.Err = openErr
 			return result
 		}
+		if info.UUIDType == UUIDTYPESTAGING && decrypted["action"] != "checkin" {
+			result.Err = errors.New("staged crypto session requires checkin")
+			return result
+		}
 		// Only authenticated packets allocate a ledger row. Winning this claim
 		// grants one dispatch; another backend must wait for the saved reply.
 		claimed, claimErr := claimCryptoProviderCallbackExchange(exchange, info.OperationID)
@@ -129,26 +134,36 @@ func processCryptoProviderCallbackWithHandler(input *AgentMessageRawInput, info 
 		}
 		response = dispatch(input, local, decrypted, &result)
 		if result.Err != nil {
+			// A returned application error is a known dispatch outcome. Preserve
+			// it just like success instead of leaving an unresolvable claim.
+			if response == nil {
+				response = make(map[string]interface{})
+			}
+			response["status"], response["error"] = "error", result.Err.Error()
+			response["action"] = decrypted["action"]
+			result.Err = nil
+		}
+		if response == nil {
+			response = map[string]interface{}{"status": "error", "error": "empty application response", "action": decrypted["action"]}
+		}
+		encoded, encodeErr := json.Marshal(response)
+		if encodeErr != nil {
+			result.Err = encodeErr
 			return result
 		}
-	} else {
-		var hasSealInput bool
-		if err = database.DB.Get(&hasSealInput, `SELECT seal_input IS NOT NULL FROM crypto_provider_exchange WHERE request_id=$1`, exchange.RequestID); err != nil {
-			result.Err = err
-			return result
-		}
-		if !hasSealInput {
-			// Dispatch can update tasks and drain queues. If the process died
-			// before saving its response, repeating those effects is unsafe.
-			result.Err = errors.New("crypto callback dispatch outcome is unresolved; reestablishment is required")
+		// Translation can time out after dispatch has consumed tasks or proxy
+		// queues. Save the logical response before any fallible translation.
+		_, result.Err = database.DB.Exec(`UPDATE crypto_provider_exchange SET dispatch_response=$2
+			WHERE request_id=$1`, exchange.RequestID, encoded)
+		if result.Err != nil {
 			return result
 		}
 	}
-	result.Message, result.Err = sealCryptoProviderExchange(local, exchange.RequestID, response, auth)
+	result.Message, result.Err = sealCryptoProviderExchange(local, exchange.RequestID, auth)
 	if result.Err != nil {
 		return result
 	}
-	_, result.Err = database.DB.Exec(`UPDATE crypto_provider_exchange SET response=$2,session_binding_id=$3 WHERE request_id=$1`,
+	_, result.Err = database.DB.Exec(`UPDATE crypto_provider_exchange SET response=$2,session_binding_id=$3,seal_input=NULL,dispatch_response=NULL WHERE request_id=$1`,
 		exchange.RequestID, result.Message, info.CryptoProviderBindingID)
 	if result.Err != nil {
 		result.Message = nil

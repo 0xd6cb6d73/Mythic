@@ -62,14 +62,20 @@ create table public.crypto_provider_exchange (
     input_digest text not null check (input_digest ~ '^[0-9a-f]{64}$'),
     request_id uuid not null unique,
     next_uuid uuid not null,
+    dispatch_response bytea,
     seal_input bytea,
     response bytea,
+    created_at timestamptz not null default now(),
     session_binding_id uuid references public.crypto_provider_binding(id),
     primary key (binding_id, route_uuid, input_digest)
 );
 
 create index crypto_provider_exchange_route_input
     on public.crypto_provider_exchange(route_uuid, input_digest);
+
+create index crypto_provider_exchange_pending
+    on public.crypto_provider_exchange(binding_id, route_uuid)
+    where response is null;
 
 alter table public.buildparameterinstance
     add column crypto_provider_binding_id uuid references public.crypto_provider_binding(id);

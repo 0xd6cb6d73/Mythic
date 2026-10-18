@@ -102,6 +102,17 @@ func TestCryptoProviderMigration(t *testing.T) {
 					t.Fatalf("missing %s: %v", table, err)
 				}
 			}
+			var pendingIndex string
+			if err := db.QueryRow(`SELECT indexdef FROM pg_indexes WHERE schemaname='public'
+				AND indexname='crypto_provider_exchange_pending'`).Scan(&pendingIndex); err != nil ||
+				!strings.Contains(pendingIndex, "(binding_id, route_uuid)") || !strings.Contains(pendingIndex, "WHERE (response IS NULL)") {
+				t.Fatalf("missing pending-exchange partial index: %q, %v", pendingIndex, err)
+			}
+			var dispatchType string
+			if err := db.QueryRow(`SELECT data_type FROM information_schema.columns WHERE table_schema='public'
+				AND table_name='crypto_provider_exchange' AND column_name='dispatch_response'`).Scan(&dispatchType); err != nil || dispatchType != "bytea" {
+				t.Fatalf("missing durable application response: %q, %v", dispatchType, err)
+			}
 			// Down includes its target migration, so stop at the feature itself.
 			rolledBack, err := migrate.ExecVersion(db, "postgres", migrations, migrate.Down, cryptoProviderMigrationVersion)
 			if err != nil {

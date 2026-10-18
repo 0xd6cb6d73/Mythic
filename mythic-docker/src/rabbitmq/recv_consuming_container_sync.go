@@ -168,6 +168,9 @@ func consumingServicesSync(in ConsumingContainerSyncMessage) error {
 			return err
 		}
 	}
+	if consumingContainer.Type == CONSUMING_SERVICES_TYPE_CRYPTO {
+		InvalidateAllCachedUUIDInfo()
+	}
 	go SendAllOperationsMessage(fmt.Sprintf("Successfully synced %s with container version %s",
 		consumingContainer.Name, in.ContainerVersion), 0, "debug", database.MESSAGE_LEVEL_DEBUG, false)
 	go ResolveAllOperationsMessageBySource(getDownContainerSource(consumingContainer.Name), 0)

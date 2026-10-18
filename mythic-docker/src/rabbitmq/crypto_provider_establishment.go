@@ -1,6 +1,7 @@
 package rabbitmq
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
@@ -80,10 +81,12 @@ func processCryptoProviderEstablishment(info *cachedUUIDInfo, body []byte, uuidS
 	if info.UUIDType != UUIDTYPEPAYLOAD && info.UUIDType != UUIDTYPESTAGING {
 		return nil, errors.New("invalid crypto establishment route")
 	}
-	stripe := sha256.Sum256([]byte(info.CryptoProviderBindingID + info.UUID + cryptoPacketDigest(body)))
-	lock := &cryptoExchangeLocks[int(stripe[0])%len(cryptoExchangeLocks)]
-	lock.Lock()
-	defer lock.Unlock()
+	if info.UUIDType == UUIDTYPEPAYLOAD {
+		stripe := sha256.Sum256([]byte(info.CryptoProviderBindingID + info.UUID + cryptoPacketDigest(body)))
+		lock := &cryptoExchangeLocks[int(stripe[0])%len(cryptoExchangeLocks)]
+		lock.Lock()
+		defer lock.Unlock()
+	}
 	exchange, err := cryptoProviderExchangeForRequest(info.CryptoProviderBindingID, info.UUID, body)
 	if err != nil {
 		return nil, err
@@ -92,6 +95,9 @@ func processCryptoProviderEstablishment(info *cachedUUIDInfo, body []byte, uuidS
 		return exchange.Response, nil
 	}
 	if info.UUIDType == UUIDTYPEPAYLOAD {
+		if err := validateCryptoProviderMessageSize(info.CryptoProvider, body); err != nil {
+			return nil, err
+		}
 		request, err := requestForBinding(info.CryptoProvider, provider.BeginSession, body, exchange.RequestID, auth)
 		if err != nil {
 			return nil, err
@@ -157,66 +163,53 @@ func processCryptoProviderEstablishment(info *cachedUUIDInfo, body []byte, uuidS
 	if info.UUIDType != UUIDTYPESTAGING {
 		return nil, errors.New("invalid crypto establishment route")
 	}
-	local := providerRequestCache(info, exchange.RequestID)
-	var hasSealInput bool
-	err = database.DB.Get(&hasSealInput, `SELECT seal_input IS NOT NULL FROM crypto_provider_exchange
-		WHERE request_id=$1 AND binding_id=$2 AND route_uuid=$3`, exchange.RequestID, exchange.BindingID, exchange.RouteUUID)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-	var response map[string]interface{}
-	if !hasSealInput {
-		decrypted, err := DecryptMessageWithAuthContext(local, &body, auth)
-		if err != nil {
-			return nil, err
-		}
-		if decrypted["action"] != "checkin" {
-			return nil, errors.New("staged crypto session requires checkin")
-		}
-		// An authenticated check-in needs a durable claim before callback
-		// creation; arbitrary unauthenticated packets never allocate rows.
-		_, err = database.DB.Exec(`INSERT INTO crypto_provider_exchange(binding_id,route_uuid,input_digest,request_id,next_uuid)
-			VALUES($1,$2,$3,$4,$5) ON CONFLICT(binding_id,route_uuid,input_digest) DO NOTHING`,
-			exchange.BindingID, exchange.RouteUUID, exchange.InputDigest, exchange.RequestID, exchange.NextUUID)
-		if err != nil {
-			return nil, err
-		}
-		response, err = handleAgentMessageCheckin(&decrypted, local, remoteIP)
-		if err != nil {
-			return nil, err
-		}
-		response["action"] = "checkin"
-	}
-	// A persisted seal input follows the callback transaction. Resume that
-	// exact seal directly without repeating callback creation or Open.
-	encoded, err := sealCryptoProviderExchange(local, exchange.RequestID, response, auth)
-	if err != nil {
-		return nil, err
-	}
-	_, err = database.DB.Exec(`UPDATE crypto_provider_exchange SET response=$2,session_binding_id=$3 WHERE request_id=$1`, exchange.RequestID, encoded, info.CryptoProviderBindingID)
-	if err != nil {
-		return nil, err
+	// Check-in carries the same delegates, responses, edges and proxy data as
+	// other actions. Use common dispatch and its durable ownership/reply path.
+	result := processCryptoProviderCallback(&AgentMessageRawInput{
+		C2Profile: info.C2ProfileName, RemoteIP: remoteIP, AuthContext: auth,
+	}, info, body, uuidSize, auth)
+	if result.Err != nil {
+		return nil, result.Err
 	}
 	removeCachedEntry(info)
-	return encoded, nil
+	return result.Message, nil
 }
 
 // Preserve the exact serializer/translator output before sealing. Reconstructing
 // a semantically identical map after a crash may change JSON member order or
 // translator output and would conflict with the original seal request ID.
-func sealCryptoProviderExchange(info *cachedUUIDInfo, requestID string, response map[string]interface{}, auth RabbitMQAuthContext) ([]byte, error) {
-	var plaintext []byte
-	err := database.DB.Get(&plaintext, `SELECT seal_input FROM crypto_provider_exchange
+func sealCryptoProviderExchange(info *cachedUUIDInfo, requestID string, auth RabbitMQAuthContext) ([]byte, error) {
+	var saved struct {
+		DispatchResponse []byte `db:"dispatch_response"`
+		SealInput        []byte `db:"seal_input"`
+		Response         []byte `db:"response"`
+	}
+	err := database.DB.Get(&saved, `SELECT dispatch_response,seal_input,response FROM crypto_provider_exchange
 		WHERE request_id=$1 AND binding_id=$2 AND route_uuid=$3`, requestID, info.CryptoProviderBindingID, info.UUID)
 	if err != nil {
 		return nil, err
 	}
+	if len(saved.Response) > 0 {
+		return saved.Response, nil
+	}
+	plaintext := saved.SealInput
 	if plaintext == nil {
+		if len(saved.DispatchResponse) == 0 {
+			return nil, errors.New("crypto callback dispatch outcome is unresolved; reestablishment is required")
+		}
+		// Decode numbers losslessly so a recovered response has the same JSON
+		// values even when application IDs exceed float64's integer precision.
+		decoder := json.NewDecoder(bytes.NewReader(saved.DispatchResponse))
+		decoder.UseNumber()
+		var response map[string]interface{}
+		if err := decoder.Decode(&response); err != nil {
+			return nil, err
+		}
 		if info.TranslationContainerName == "" {
 			plaintext, err = marshalMessageForAgentFormat(info, response)
 		} else {
 			var converted *TrMythicC2ToCustomMessageFormatMessageResponse
-			converted, err = RabbitMQConnection.SendTrRPCMythicC2ToCustomMessage(TrMythicC2ToCustomMessageFormatMessage{
+			converted, err = translateCryptoProviderResponse(TrMythicC2ToCustomMessageFormatMessage{
 				TranslationContainerName: info.TranslationContainerName,
 				C2Name:                   info.C2ProfileName, Message: response, UUID: info.UUID,
 				MythicEncrypts: true, CryptoKeys: info.getAllKeys(),
@@ -234,9 +227,22 @@ func sealCryptoProviderExchange(info *cachedUUIDInfo, requestID string, response
 		if len(plaintext) == 0 || len(plaintext) > provider.MaxMessageBytes {
 			return nil, errors.New("invalid provider response size")
 		}
-		err = database.DB.Get(&plaintext, `UPDATE crypto_provider_exchange SET seal_input=COALESCE(seal_input,$4)
-			WHERE request_id=$1 AND binding_id=$2 AND route_uuid=$3 RETURNING seal_input`,
+		err = database.DB.Get(&plaintext, `UPDATE crypto_provider_exchange SET seal_input=COALESCE(seal_input,$4),dispatch_response=NULL
+			WHERE request_id=$1 AND binding_id=$2 AND route_uuid=$3 AND response IS NULL RETURNING seal_input`,
 			requestID, info.CryptoProviderBindingID, info.UUID, plaintext)
+		if errors.Is(err, sql.ErrNoRows) {
+			// Another retry may have finished while this translator was running.
+			// Never recreate plaintext or seal new bytes for a completed request.
+			var completed []byte
+			if err := database.DB.Get(&completed, `SELECT response FROM crypto_provider_exchange
+				WHERE request_id=$1 AND binding_id=$2 AND route_uuid=$3`, requestID, info.CryptoProviderBindingID, info.UUID); err != nil {
+				return nil, err
+			}
+			if len(completed) == 0 {
+				return nil, errors.New("crypto callback response is unavailable")
+			}
+			return completed, nil
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -247,6 +253,10 @@ func sealCryptoProviderExchange(info *cachedUUIDInfo, requestID string, response
 	}
 	return providerFrame(info.UUID, *protected, info.PayloadTypeMessageUUIDLength)
 }
+
+// Keep the test seam local to provider responses; ordinary translation RPCs
+// continue to use the existing shared transport implementation.
+var translateCryptoProviderResponse = RabbitMQConnection.SendTrRPCMythicC2ToCustomMessage
 
 // Build a request-local view; never copy a mutex or mutate shared cached state
 // with a request ID that another incoming request could overwrite.
