@@ -344,7 +344,7 @@ const PayloadTypesC2ProfilesTableRow = ({service, showDeleted}) => {
     } else if(service.__typename === "translationcontainer"){
         return <TranslationContainerRow service={service} showDeleted={showDeleted} />
     } else if(service.__typename === "consuming_container"){
-        return <ConsumingServicesTableRow service={service} showDeleted={showDeleted} />
+        return <ConsumingServicesTableRow service={service} showDeleted={showDeleted} separateIcon />
     }
     return null
 }

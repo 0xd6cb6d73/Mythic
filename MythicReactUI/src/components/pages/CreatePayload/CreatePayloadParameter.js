@@ -26,6 +26,7 @@ import {CircularProgress} from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import InputLabel from '@mui/material/InputLabel';
 import {CryptoParameterSelect} from './CryptoParameterSelect';
+import {usesCryptoProviderSelector} from './CryptoProviderChoices';
 import {DragAndDropFileUpload} from "../Callbacks/TaskParametersDialogRow";
 import {MythicChip} from "../../MythicComponents/MythicChip";
 import DialogContent from '@mui/material/DialogContent';
@@ -127,6 +128,8 @@ export function CreatePayloadParameter({onChange, parameter_type, default_value,
                                            payload_type, selected_os, c2_profile_name, dynamic_query_function, displayMode = "table",
                                        getOtherParameters}){
     const theme = useTheme();
+    const useProviderSelector = usesCryptoProviderSelector({crypto_type, parameter_type,
+        supported_crypto_schemes, trackedValue, default_value});
     const hasJSONStringSchema = parameter_type === "JSONString" && hasUsableJSONStringSchema(json_string_schema);
     const [configEditorOpen, setConfigEditorOpen] = React.useState(false);
     const [editorTab, setEditorTab] = React.useState("source");
@@ -197,7 +200,7 @@ export function CreatePayloadParameter({onChange, parameter_type, default_value,
                     choicesInUse = [...dynamicQueryResponse.choices];
                 }
 
-                if(crypto_type && (parameter_type === "ChooseOne" || parameter_type === "ChooseOneCustom" || parameter_type === "String")){
+                if(useProviderSelector){
                     setDynamicCryptoChoices({choices: choicesInUse,
                         labels: dynamicQueryResponse.complex_choices?.length > 0 ?
                             Object.fromEntries(dynamicQueryResponse.complex_choices.map(choice => [choice.value, choice.display_value])) : {}});
@@ -342,7 +345,7 @@ export function CreatePayloadParameter({onChange, parameter_type, default_value,
         onChange(name, [...newFiles]);
     }
     useEffect( () => {
-        if(crypto_type && (parameter_type === "ChooseOne" || parameter_type === "ChooseOneCustom" || parameter_type === "String")){
+        if(useProviderSelector){
             if(dynamic_query_function && !usingDynamicParamChoices.current){
                 usingDynamicParamChoices.current = true;
                 setBackdropOpen(true);
@@ -469,7 +472,7 @@ export function CreatePayloadParameter({onChange, parameter_type, default_value,
         }
         // Reinitialize only when the parameter identity or selected saved instance changes.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [default_value, parameter_type, name, instance_name, crypto_type]);
+    }, [default_value, parameter_type, name, instance_name, useProviderSelector]);
     const onChangeTextChooseOneCustom = (name, newValue, error) => {
         setChooseOneCustomValue(newValue);
         if(newValue === ""){
@@ -773,7 +776,7 @@ export function CreatePayloadParameter({onChange, parameter_type, default_value,
         onChange(name, values, false);
     }
     const getParameterObject = () => {
-        if(crypto_type && (parameter_type === "ChooseOne" || parameter_type === "ChooseOneCustom" || parameter_type === "String")){
+        if(useProviderSelector){
             return (
                 <div className="mythic-create-inline-control items-center flex gap-4 min-w-0 w-full relative">
                     <Backdrop open={backdropOpen} style={{zIndex: 2, position: "absolute"}}><CircularProgress color="inherit" /></Backdrop>

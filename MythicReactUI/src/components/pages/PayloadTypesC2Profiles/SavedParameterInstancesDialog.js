@@ -21,6 +21,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import {MythicDialogButton, MythicDialogFooter} from "../../MythicComponents/MythicDialogLayout";
 import {MythicLoadingState} from "../../MythicComponents/MythicStateDisplay";
 import {downloadFileFromMemory} from '../../utilities/Clipboard';
+import {CryptoProviderDiscovery} from '../CreatePayload/CryptoProviderContext';
 
 const getProfileConfigQuery = gql`
 query getProfileParameters($id: Int!) {
@@ -51,6 +52,7 @@ query getProfileParameters($id: Int!) {
 const getBuildParameterConfigQuery = gql`
 query getBuildParameters($id: Int!) {
   payloadtype_by_pk(id: $id) {
+    supported_crypto_schemes
     buildparameters(where: {deleted: {_eq: false}}, order_by: {name: asc}){
       default_value
       description
@@ -275,6 +277,7 @@ export function SavedParameterInstancesDialog(props) {
     const [createdInstances, setCreatedInstances] = useState([]);
     const [baseParameters, setBaseParameters] = useState([]);
     const [currentParameters, setCurrentParameters] = useState([]);
+    const [supportedCryptoSchemes, setSupportedCryptoSchemes] = useState([]);
     const labels = isBuildParameterInstance ? {
         title: `Save an Instance of ${props.name}'s Build Parameters`,
         loadingDescription: "Fetching saved build parameter sets.",
@@ -299,6 +302,9 @@ export function SavedParameterInstancesDialog(props) {
     const { loading } = useQuery(isBuildParameterInstance ? getBuildParameterConfigQuery : getProfileConfigQuery, {
         variables: {id: props.id},
         onCompleted: data => {
+            if(isBuildParameterInstance){
+                setSupportedCryptoSchemes(data.payloadtype_by_pk.supported_crypto_schemes || []);
+            }
             const parameters = prepareBaseParameters(isBuildParameterInstance ?
                 data.payloadtype_by_pk.buildparameters :
                 data.c2profile_by_pk.c2profileparameters);
@@ -573,6 +579,7 @@ export function SavedParameterInstancesDialog(props) {
                     <CreatePayloadBuildParametersTable
                         buildParameters={currentParameters}
                         payload_type={props.name}
+                        supported_crypto_schemes={supportedCryptoSchemes}
                         os={props.selected_os || ""}
                         onChange={updateParameter}
                     />
@@ -597,5 +604,5 @@ export function C2ProfileSavedInstancesDialog(props) {
 }
 
 export function PayloadTypeBuildParameterInstancesDialog(props) {
-    return <SavedParameterInstancesDialog {...props} instanceType="build" />;
+    return <CryptoProviderDiscovery><SavedParameterInstancesDialog {...props} instanceType="build" /></CryptoProviderDiscovery>;
 }

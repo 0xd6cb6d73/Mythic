@@ -4,6 +4,11 @@ const identifier = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 
 export const isProviderSelection = (value) => typeof value === "string" && value.startsWith("provider:");
 
+export const usesCryptoProviderSelector = (parameter) => Boolean(parameter.crypto_type &&
+    ["String", "ChooseOne", "ChooseOneCustom"].includes(parameter.parameter_type) &&
+    ((Array.isArray(parameter.supported_crypto_schemes) && parameter.supported_crypto_schemes.length > 0) ||
+        isProviderSelection(parameter.trackedValue ?? parameter.default_value)));
+
 export const parseProviderSelection = (value) => {
     if(!isProviderSelection(value)){
         return null;

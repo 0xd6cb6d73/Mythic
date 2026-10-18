@@ -1,10 +1,24 @@
-import {getBuildCryptoError, getCryptoChoices, getCryptoParameterError, getCryptoSelectionError} from './CryptoProviderChoices';
+import {getBuildCryptoError, getCryptoChoices, getCryptoParameterError, getCryptoSelectionError, usesCryptoProviderSelector} from './CryptoProviderChoices';
 
 const provider = (name, schemes, online = true) => ({
     name, container_running: online, crypto_capabilities: {api_version: 1, schemes},
 });
 const discovery = (providers, extra = {}) => ({providers, loading: false, error: null, ...extra});
 const value = 'provider:custom-worker:example';
+
+test.each(['String', 'ChooseOne', 'ChooseOneCustom'])('keeps legacy %s controls unless the payload opts into providers', parameter_type => {
+    const parameter = {crypto_type: true, parameter_type, trackedValue: 'aes256_hmac'};
+    expect(usesCryptoProviderSelector(parameter)).toBe(false);
+    expect(usesCryptoProviderSelector({...parameter, supported_crypto_schemes: []})).toBe(false);
+    expect(usesCryptoProviderSelector({...parameter, supported_crypto_schemes: ['example']})).toBe(true);
+    expect(usesCryptoProviderSelector({...parameter, crypto_type: false, supported_crypto_schemes: ['example']})).toBe(false);
+});
+
+test('keeps imported provider selections visible for validation after payload support is removed', () => {
+    expect(usesCryptoProviderSelector({crypto_type: true, parameter_type: 'ChooseOne', trackedValue: value,
+        supported_crypto_schemes: []})).toBe(true);
+    expect(usesCryptoProviderSelector({crypto_type: true, parameter_type: 'String', default_value: value})).toBe(true);
+});
 
 test('preserves builtin values, order, display labels, and default while appending compatible providers', () => {
     const choices = ['none', 'aes256_hmac'];

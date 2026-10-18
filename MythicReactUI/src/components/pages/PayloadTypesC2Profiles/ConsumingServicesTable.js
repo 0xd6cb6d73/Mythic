@@ -53,7 +53,7 @@ mutation toggleConsumingContainerDeleteStatus($id: Int!, $deleted: Boolean!){
 const webhook_events = ["new_alert","new_callback","new_custom","new_feedback", "new_startup"];
 const logging_events = ["new_artifact","new_callback", "new_credential","new_file", "new_keylog",  "new_payload", "new_response", "new_task"];
 
-export const ConsumingServicesTableRow = ({service, showDeleted}) => {
+export const ConsumingServicesTableRow = ({service, showDeleted, separateIcon = false}) => {
     const openListFilesInformation = React.useRef("");
     const [testWebhook] = useMutation(testWebhookMutation, {
         onCompleted: data => {
@@ -234,9 +234,12 @@ export const ConsumingServicesTableRow = ({service, showDeleted}) => {
             <MythicTableCell>
                 {renderDeleteButton(w)}
             </MythicTableCell>
+            {separateIcon && <MythicTableCell>
+                <MythicAgentSVGIcon payload_type={w.name} style={{width: "80px", padding: "5px", objectFit: "unset"}} />
+            </MythicTableCell>}
             <MythicTableCell>
                 <div className="mythic-installed-service-identity-cell items-start flex gap-5 min-w-0">
-                    <MythicAgentSVGIcon payload_type={w.name} style={{width: "80px", padding: "5px", objectFit: "unset"}} />
+                    {!separateIcon && <MythicAgentSVGIcon payload_type={w.name} style={{width: "80px", padding: "5px", objectFit: "unset"}} />}
                     <InstalledServiceIdentity
                         name={w.name}
                         typeLabel={typeLabel}
@@ -378,7 +381,7 @@ export const ConsumingServicesTableRow = ({service, showDeleted}) => {
         <>
             {getTableRow(localData)}
             {detailContent &&
-                <InstalledServiceDetailRow open={openDetails} colSpan={4}>
+                <InstalledServiceDetailRow open={openDetails} colSpan={separateIcon ? 5 : 4}>
                     {detailContent}
                 </InstalledServiceDetailRow>
             }
