@@ -78,6 +78,7 @@ export function CreatePayloadBuildParametersTable(props){
                             returnAllDictValues={props.returnAllDictValues}
                             onChange={props.onChange}
                             getOtherParameters={getOtherParameters}
+                            supported_crypto_schemes={props.supported_crypto_schemes}
                             {...op}
                         />
                     ))}

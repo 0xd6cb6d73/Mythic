@@ -95,6 +95,7 @@ subscription ConsumingContainer{
         container_running
         deleted
         subscriptions
+        crypto_capabilities
         semver
     }
 }
@@ -184,7 +185,8 @@ export function PayloadTypesC2Profiles({me}){
             case "Command Augmentation":
                 return visibleData.filter(c => c.__typename === "payloadtype" && (c.agent_type === "command_augment"));
             case "3rd Party":
-                return visibleData.filter(c => c.__typename === "payloadtype" && (c.agent_type === "service"));
+                return visibleData.filter(c => (c.__typename === "payloadtype" && c.agent_type === "service") ||
+                    (c.__typename === "consuming_container" && c.type === "crypto"));
             case "Webhooks":
                 return visibleData.filter(c => c.__typename === "consuming_container" && c.type === "webhook");
             case "Loggers":
@@ -341,6 +343,8 @@ const PayloadTypesC2ProfilesTableRow = ({service, showDeleted}) => {
         return <C2ProfilesRow service={service} showDeleted={showDeleted} />
     } else if(service.__typename === "translationcontainer"){
         return <TranslationContainerRow service={service} showDeleted={showDeleted} />
+    } else if(service.__typename === "consuming_container"){
+        return <ConsumingServicesTableRow service={service} showDeleted={showDeleted} separateIcon />
     }
     return null
 }

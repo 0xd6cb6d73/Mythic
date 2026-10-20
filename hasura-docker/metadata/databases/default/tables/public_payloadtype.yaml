@@ -76,6 +76,7 @@ select_permissions:
         - note
         - semver
         - supported_c2
+        - supported_crypto_schemes
         - supported_os
         - supported_translation_container
         - wrapper_payload_requirements
@@ -106,6 +107,7 @@ select_permissions:
         - note
         - semver
         - supported_c2
+        - supported_crypto_schemes
         - supported_os
         - supported_translation_container
         - wrapper_payload_requirements
@@ -136,6 +138,7 @@ select_permissions:
         - note
         - semver
         - supported_c2
+        - supported_crypto_schemes
         - supported_os
         - supported_translation_container
         - wrapper_payload_requirements
@@ -166,6 +169,7 @@ select_permissions:
         - note
         - semver
         - supported_c2
+        - supported_crypto_schemes
         - supported_os
         - supported_translation_container
         - wrapper_payload_requirements

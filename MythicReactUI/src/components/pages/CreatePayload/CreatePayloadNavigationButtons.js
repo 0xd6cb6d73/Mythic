@@ -28,7 +28,7 @@ export function CreatePayloadNavigationButtons(props){
                   tone={props.last ? "success" : "info"}
                   variant="contained"
                   onClick={props.finished}
-                  disabled={disabledButtons}
+                  disabled={props.disableNext || disabledButtons}
               >
                 {props.last ? props.showExtraOptions ? 'Create Payload Again' : 'Create Payload' : 'Next'}
               </MythicActionButton>

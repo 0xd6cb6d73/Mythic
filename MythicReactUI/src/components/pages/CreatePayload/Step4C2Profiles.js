@@ -18,6 +18,7 @@ import Tabs from '@mui/material/Tabs';
 import CloseIcon from '@mui/icons-material/Close';
 import {useMythicLazyQuery} from "../../utilities/useMythicLazyQuery";
 import {ConfigurationSummary} from "./Step1SelectOS";
+import {isProviderSelection} from './CryptoProviderChoices';
 
 
 const GET_Payload_Types = gql`
@@ -34,6 +35,7 @@ query getPayloadTypesC2ProfilesQuery($payloadType: String!, $operation_id: Int!)
       id
       name
       parameter_type
+      crypto_type
       randomize
       required
       verifier_regex
@@ -63,6 +65,7 @@ query getProfileInstanceQuery($name: String!, $operation_id: Int!, $c2_profile_i
       id
       name
       parameter_type
+      crypto_type
       randomize
       required
       verifier_regex
@@ -95,6 +98,7 @@ query getDefaultC2ProfileParameters($c2profile_id: Int!) {
         id
         name
         parameter_type
+        crypto_type
         randomize
         required
         verifier_regex
@@ -135,7 +139,8 @@ export const getModifiedC2Params = (c2, c2profileparameters, buildOptions, use_s
         if(c2Config.supported === false){
             return [...prev];
         }
-        if(c2Config.default_value !== undefined){
+        const preserveProvider = use_supplied_values && param.crypto_type && isProviderSelection(param.value);
+        if(c2Config.default_value !== undefined && !preserveProvider){
             configuredParam.value = c2Config.default_value;
             configuredParam.trackedValue = c2Config.default_value;
             configuredParam.initialValue = c2Config.default_value;
@@ -147,7 +152,7 @@ export const getModifiedC2Params = (c2, c2profileparameters, buildOptions, use_s
             configuredParam.initialValue = configuredParam.choices;
         }else if(c2Config.choices !== undefined && c2Config.choices !== null){
             configuredParam.choices = c2Config.choices;
-            if(!configuredParam.choices.includes(configuredParam.default_value)){
+            if(!configuredParam.choices.includes(configuredParam.default_value) && !preserveProvider){
                 if(configuredParam.choices.length > 0){
                     configuredParam.value = configuredParam.choices[0];
                     configuredParam.trackedValue = configuredParam.choices[0];
@@ -473,6 +478,7 @@ export function Step4C2Profiles(props){
                         </section>
                         <section className="mythic-create-section p-6 flex flex-column gap-5 mythic-create-section-scroll min-h-0 min-w-0 overflow-hidden overflow-auto rounded bg-surface-muted border-subtle">
                             <C2ProfileTabs includedC2Profiles={includedC2Profiles} os={props.buildOptions.os}
+                                           supported_crypto_schemes={props.buildOptions.supported_crypto_schemes}
                                            onCloseTab={removeC2} onChange={updateC2Parameter}
                                            onChangeCreatedInstanceName={onChangeCreatedInstanceName}
                             />
@@ -610,7 +616,7 @@ function CustomTabPanel(props) {
         </div>
     );
 }
-const C2ProfileTabs = ({includedC2Profiles, onChange, os, onCloseTab, onChangeCreatedInstanceName}) => {
+const C2ProfileTabs = ({includedC2Profiles, onChange, os, onCloseTab, onChangeCreatedInstanceName, supported_crypto_schemes}) => {
     const [value, setValue] = React.useState(0);
     const onCloseTabLocal = (e, index) => {
         e.stopPropagation();
@@ -665,6 +671,7 @@ const C2ProfileTabs = ({includedC2Profiles, onChange, os, onCloseTab, onChangeCr
                         </Select>
                     }
                     <CreatePayloadBuildParametersTable instance_name={c.selected_instance} onChange={(n,v,e) => onChange(index, n, v, e)}
+                                                       supported_crypto_schemes={supported_crypto_schemes}
                                                        buildParameters={c.c2profileparameters} os={os}
                                                        c2_name={c.name}
                                                        c2_profile_name={c.name}

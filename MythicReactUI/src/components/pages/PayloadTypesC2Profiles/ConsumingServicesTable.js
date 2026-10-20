@@ -53,7 +53,7 @@ mutation toggleConsumingContainerDeleteStatus($id: Int!, $deleted: Boolean!){
 const webhook_events = ["new_alert","new_callback","new_custom","new_feedback", "new_startup"];
 const logging_events = ["new_artifact","new_callback", "new_credential","new_file", "new_keylog",  "new_payload", "new_response", "new_task"];
 
-export const ConsumingServicesTableRow = ({service, showDeleted}) => {
+export const ConsumingServicesTableRow = ({service, showDeleted, separateIcon = false}) => {
     const openListFilesInformation = React.useRef("");
     const [testWebhook] = useMutation(testWebhookMutation, {
         onCompleted: data => {
@@ -125,6 +125,7 @@ export const ConsumingServicesTableRow = ({service, showDeleted}) => {
         switch(service.type){
             case "webhook":
             case "logging":
+            case "crypto":
                 setLocalData({...service});
                 break;
             case "eventing":
@@ -227,15 +228,18 @@ export const ConsumingServicesTableRow = ({service, showDeleted}) => {
             </span>
         );
     };
-    const renderBaseRow = ({w, typeLabel, metadataItems, actions, hasDetails = false}) => (
+    const renderBaseRow = ({w, typeLabel, metadataItems, actions, hasDetails = false, showFiles = true}) => (
         (showDeleted || !w.deleted) &&
         <TableRow key={w.id} hover>
             <MythicTableCell>
                 {renderDeleteButton(w)}
             </MythicTableCell>
+            {separateIcon && <MythicTableCell>
+                <MythicAgentSVGIcon payload_type={w.name} style={{width: "80px", padding: "5px", objectFit: "unset"}} />
+            </MythicTableCell>}
             <MythicTableCell>
                 <div className="mythic-installed-service-identity-cell items-start flex gap-5 min-w-0">
-                    <MythicAgentSVGIcon payload_type={w.name} style={{width: "80px", padding: "5px", objectFit: "unset"}} />
+                    {!separateIcon && <MythicAgentSVGIcon payload_type={w.name} style={{width: "80px", padding: "5px", objectFit: "unset"}} />}
                     <InstalledServiceIdentity
                         name={w.name}
                         typeLabel={typeLabel}
@@ -252,7 +256,7 @@ export const ConsumingServicesTableRow = ({service, showDeleted}) => {
             </MythicTableCell>
             <MythicTableCell>
                 <div className="items-center flex flex-wrap gap-3 mythic-service-actions gap-4 flex-nowrap">
-                    {renderFileButton(w)}
+                    {showFiles && renderFileButton(w)}
                     {actions}
                     {hasDetails &&
                         <InstalledServiceDetailToggle open={openDetails} onClick={() => setOpenDetails((current) => !current)} />
@@ -263,6 +267,22 @@ export const ConsumingServicesTableRow = ({service, showDeleted}) => {
     );
     const getTableRow = (w) => {
         switch(service.type){
+            case "crypto":
+                return renderBaseRow({
+                    w,
+                    typeLabel: "Crypto provider",
+                    metadataItems: [
+                        {label: "Type", value: w.type},
+                        {label: "Version", value: w.semver, chip: true},
+                        {label: "Schemes", value: w.crypto_capabilities?.schemes || []},
+                        {label: "API", value: w.crypto_capabilities?.api_version},
+                        {label: "Session persistence", value: w.crypto_capabilities?.session_persistence},
+                        {label: "Maximum message bytes", value: w.crypto_capabilities?.max_message_bytes},
+                        {label: "Result retention seconds", value: w.crypto_capabilities?.result_retention_seconds},
+                    ],
+                    actions: null,
+                    showFiles: false,
+                });
             case "webhook":
                 return renderBaseRow({
                     w,
@@ -361,7 +381,7 @@ export const ConsumingServicesTableRow = ({service, showDeleted}) => {
         <>
             {getTableRow(localData)}
             {detailContent &&
-                <InstalledServiceDetailRow open={openDetails} colSpan={4}>
+                <InstalledServiceDetailRow open={openDetails} colSpan={separateIcon ? 5 : 4}>
                     {detailContent}
                 </InstalledServiceDetailRow>
             }

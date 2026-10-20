@@ -25,6 +25,8 @@ import {Backdrop} from '@mui/material';
 import {CircularProgress} from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import InputLabel from '@mui/material/InputLabel';
+import {CryptoParameterSelect} from './CryptoParameterSelect';
+import {usesCryptoProviderSelector} from './CryptoProviderChoices';
 import {DragAndDropFileUpload} from "../Callbacks/TaskParametersDialogRow";
 import {MythicChip} from "../../MythicComponents/MythicChip";
 import DialogContent from '@mui/material/DialogContent';
@@ -122,10 +124,12 @@ function getJSONEditorPlaceholder(schema){
 }
 export function CreatePayloadParameter({onChange, parameter_type, default_value, name, required, verifier_regex, id,
                                            description, initialValue, choices, trackedValue, instance_name, choices_display_names,
-                                            display_name, json_string_schema,
+                                            display_name, json_string_schema, crypto_type, supported_crypto_schemes,
                                            payload_type, selected_os, c2_profile_name, dynamic_query_function, displayMode = "table",
                                        getOtherParameters}){
     const theme = useTheme();
+    const useProviderSelector = usesCryptoProviderSelector({crypto_type, parameter_type,
+        supported_crypto_schemes, trackedValue, default_value});
     const hasJSONStringSchema = parameter_type === "JSONString" && hasUsableJSONStringSchema(json_string_schema);
     const [configEditorOpen, setConfigEditorOpen] = React.useState(false);
     const [editorTab, setEditorTab] = React.useState("source");
@@ -150,6 +154,7 @@ export function CreatePayloadParameter({onChange, parameter_type, default_value,
     const [fileMultValue, setFileMultValue] = React.useState([]);
     const [mapArray, setMapArray] = React.useState([]);
     const [backdropOpen, setBackdropOpen] = React.useState(false);
+    const [dynamicCryptoChoices, setDynamicCryptoChoices] = React.useState(null);
     const usingDynamicParamChoices = React.useRef(false);
     const handleDynamicQueryCompleted = (data) => {
         const dynamicQueryResponse = data.dynamicQueryBuildParameterFunction || data.dynamicQueryC2ProfileParameterFunction;
@@ -195,6 +200,13 @@ export function CreatePayloadParameter({onChange, parameter_type, default_value,
                     choicesInUse = [...dynamicQueryResponse.choices];
                 }
 
+                if(useProviderSelector){
+                    setDynamicCryptoChoices({choices: choicesInUse,
+                        labels: dynamicQueryResponse.complex_choices?.length > 0 ?
+                            Object.fromEntries(dynamicQueryResponse.complex_choices.map(choice => [choice.value, choice.display_value])) : {}});
+                    setBackdropOpen(false);
+                    return;
+                }
                 if(parameter_type === "ChooseOne"){
                     if(choicesInUse.length > 0){
                         const currentValue = trackedValue !== undefined && trackedValue !== "" ? trackedValue : value;
@@ -333,6 +345,14 @@ export function CreatePayloadParameter({onChange, parameter_type, default_value,
         onChange(name, [...newFiles]);
     }
     useEffect( () => {
+        if(useProviderSelector){
+            if(dynamic_query_function && !usingDynamicParamChoices.current){
+                usingDynamicParamChoices.current = true;
+                setBackdropOpen(true);
+                submitDynamicQueryFunction();
+            }
+            return;
+        }
         if( parameter_type === "ChooseOne" || parameter_type === "ChooseOneCustom" ){
             let currentChoices = [];
             let currentChoiceMap = {};
@@ -452,7 +472,7 @@ export function CreatePayloadParameter({onChange, parameter_type, default_value,
         }
         // Reinitialize only when the parameter identity or selected saved instance changes.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [default_value, parameter_type, name, instance_name]);
+    }, [default_value, parameter_type, name, instance_name, useProviderSelector]);
     const onChangeTextChooseOneCustom = (name, newValue, error) => {
         setChooseOneCustomValue(newValue);
         if(newValue === ""){
@@ -756,6 +776,26 @@ export function CreatePayloadParameter({onChange, parameter_type, default_value,
         onChange(name, values, false);
     }
     const getParameterObject = () => {
+        if(useProviderSelector){
+            return (
+                <div className="mythic-create-inline-control items-center flex gap-4 min-w-0 w-full relative">
+                    <Backdrop open={backdropOpen} style={{zIndex: 2, position: "absolute"}}><CircularProgress color="inherit" /></Backdrop>
+                    <CryptoParameterSelect name={name} display_name={display_name} description={description}
+                        choices={dynamicCryptoChoices?.choices || choices}
+                        choices_display_names={dynamicCryptoChoices?.labels || choices_display_names} trackedValue={trackedValue}
+                        default_value={default_value} supported_crypto_schemes={supported_crypto_schemes} onChange={onChange}
+                        allowCustom={parameter_type === "ChooseOneCustom" || parameter_type === "String"}
+                        required={required} verifier_regex={verifier_regex} />
+                    {dynamic_query_function &&
+                        <MythicStyledTooltip title="ReIssue Dynamic Query Function">
+                            <MythicActionButton iconOnly appearance="raised" colorMode="hover" tone="info" size="small" onClick={reIssueDynamicQueryFunction}>
+                                <RefreshIcon fontSize="small" />
+                            </MythicActionButton>
+                        </MythicStyledTooltip>
+                    }
+                </div>
+            );
+        }
         switch(parameter_type){
             case "Date":
                 return (
@@ -1249,6 +1289,9 @@ export function CreatePayloadParameter({onChange, parameter_type, default_value,
         }
     }
     const modifiedValue = () => {
+        if(crypto_type && (parameter_type === "ChooseOne" || parameter_type === "ChooseOneCustom" || parameter_type === "String")){
+            return trackedValue !== initialValue;
+        }
         switch(parameter_type){
             case "Date":
                 return (new Date(dateValue)).toISOString().slice(0,10) !== initialValue;
