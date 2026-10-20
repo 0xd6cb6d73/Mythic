@@ -38,6 +38,11 @@ func handleAgentMessageCheckin(incoming *map[string]interface{}, UUIDInfo *cache
 		}
 	*/
 	//logging.LogInfo("got a checkin message", "uuidtype", UUIDInfo.UUIDType, "uuid", UUIDInfo.UUID)
+	if UUIDInfo.CryptoProviderBindingID != "" {
+		if err := validateCryptoProviderAgentFields(*incoming); err != nil {
+			return nil, err
+		}
+	}
 	if UUIDInfo.UUIDType == UUIDTYPECALLBACK {
 		// this means we got a new `checkin` message from an existing callback
 		// use this to simply update the callback information rather than creating a new callback
@@ -57,8 +62,19 @@ func handleAgentMessageCheckin(incoming *map[string]interface{}, UUIDInfo *cache
 		return nil, errors.New(fmt.Sprintf("Failed to decode agent message into MythicRPCCallbackCreateMessage struct: %s", err.Error()))
 	}
 	mythicRPCCallbackCreateMessage.C2ProfileName = UUIDInfo.C2ProfileName
+	if UUIDInfo.CryptoProviderBindingID != "" {
+		if UUIDInfo.UUIDType != UUIDTYPESTAGING || UUIDInfo.PayloadUUID == "" || agentMessage.PayloadUUID != UUIDInfo.PayloadUUID {
+			return nil, errors.New("provider check-in must claim its authenticated staging payload")
+		}
+		bindingID := UUIDInfo.CryptoProviderBindingID
+		mythicRPCCallbackCreateMessage.CryptoProviderBindingID = &bindingID
+		mythicRPCCallbackCreateMessage.CryptoProviderStagingUUID = UUIDInfo.UUID
+		mythicRPCCallbackCreateMessage.CryptoProviderRequestID = UUIDInfo.CryptoProviderRequestID
+		mythicRPCCallbackCreateMessage.EncryptionKey = nil
+		mythicRPCCallbackCreateMessage.DecryptionKey = nil
+	}
 	newCryptoKeys := UUIDInfo.getAllKeys()
-	if len(newCryptoKeys) > 0 {
+	if UUIDInfo.CryptoProviderBindingID == "" && len(newCryptoKeys) > 0 {
 		if agentMessage.EncKey == nil || len(*agentMessage.EncKey) == 0 {
 			mythicRPCCallbackCreateMessage.EncryptionKey = newCryptoKeys[0].EncKey
 			mythicRPCCallbackCreateMessage.CryptoType = newCryptoKeys[0].Value
@@ -86,7 +102,9 @@ func handleAgentMessageCheckin(incoming *map[string]interface{}, UUIDInfo *cache
 	reflectBackOtherKeys(&response, &agentMessage.Other)
 	UUIDInfo.CallbackID = mythicRPCCallbackCreateMessageResponse.CallbackID
 	UUIDInfo.CallbackDisplayID = mythicRPCCallbackCreateMessageResponse.CallbackDisplayID
-	UUIDInfo.CryptoType = mythicRPCCallbackCreateMessage.CryptoType
+	if UUIDInfo.CryptoProviderBindingID == "" {
+		UUIDInfo.CryptoType = mythicRPCCallbackCreateMessage.CryptoType
+	}
 	return response, nil
 
 }

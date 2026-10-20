@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	mythicCrypto "github.com/its-a-feature/Mythic/crypto"
+	"github.com/its-a-feature/Mythic/crypto/provider"
 	"github.com/its-a-feature/Mythic/database"
 	databaseStructs "github.com/its-a-feature/Mythic/database/structs"
 	"github.com/its-a-feature/Mythic/logging"
@@ -47,6 +48,10 @@ type AgentMessageRawInput struct {
 }
 
 type cachedUUIDInfo struct {
+	CryptoProviderBindingID      string
+	CryptoProvider               *provider.Binding
+	CryptoProviderRequestID      string
+	PayloadUUID                  string
 	stateMutex                   sync.RWMutex
 	cryptoMutex                  sync.Mutex
 	UUID                         string
@@ -133,6 +138,21 @@ func (cache *cachedUUIDInfo) getAllKeys() []mythicCrypto.CryptoKeys {
 	}
 }
 func (cache *cachedUUIDInfo) IterateAndAct(agentMessage *[]byte, action string) (*[]byte, error) {
+	return cache.IterateAndActWithAuthContext(agentMessage, action, RabbitMQAuthContext{OperationID: cache.OperationID})
+}
+
+func (cache *cachedUUIDInfo) IterateAndActWithAuthContext(agentMessage *[]byte, action string, authContext RabbitMQAuthContext) (*[]byte, error) {
+	if cache.CryptoProvider != nil {
+		requestID := ""
+		if cache.CryptoProviderRequestID != "" {
+			requestID = uuid.NewSHA1(uuid.MustParse(cache.CryptoProviderRequestID), []byte(action)).String()
+		}
+		result, err := cryptoProviderAct(cache.CryptoProvider, action, *agentMessage, requestID, authContext)
+		if err != nil {
+			return nil, err
+		}
+		return &result, nil
+	}
 	keyOptions := cache.getAllKeys()
 	var err error
 	err = nil
@@ -242,7 +262,7 @@ func cacheUUIDInfo(c2profile string, messageUUID string, newCache *cachedUUIDInf
 }
 
 func updateCachedCallbackCheckin(uuidInfo *cachedUUIDInfo, updateCheckinTime bool) {
-	if updateCheckinTime && uuidInfo.UUIDType == UUIDTYPECALLBACK {
+	if updateCheckinTime && uuidInfo.UUIDType == UUIDTYPECALLBACK && uuidInfo.CryptoProviderBindingID == "" {
 		UpdateCallbackEdgesAndCheckinTime(uuidInfo)
 	}
 }
@@ -488,6 +508,10 @@ func processAgentMessageContent(agentMessageInput *AgentMessageRawInput, uuidInf
 	}
 	if _, ok := decryptedMessage[CALLBACK_MESSAGE_KEY_DELEGATES]; ok {
 		// this means we have some delegate messages to process recursively
+		parentCallbackUUID := instanceResponse.OuterUuid
+		if uuidInfo.CryptoProviderBindingID != "" && instanceResponse.NewCallbackUUID != "" {
+			parentCallbackUUID = instanceResponse.NewCallbackUUID
+		}
 		delegates := []delegateMessage{}
 		if err := mapstructure.Decode(decryptedMessage[CALLBACK_MESSAGE_KEY_DELEGATES], &delegates); err != nil {
 			logging.LogError(err, "Failed to parse delegate messages")
@@ -499,8 +523,9 @@ func processAgentMessageContent(agentMessageInput *AgentMessageRawInput, uuidInf
 						uuidInfo.OperationID, "debug", database.MESSAGE_LEVEL_AGENT_MESSGAGE, false)
 				}
 				currentDelegateMessage := AgentMessageRawInput{
-					C2Profile: delegate.C2ProfileName,
-					RemoteIP:  agentMessageInput.RemoteIP,
+					C2Profile:   delegate.C2ProfileName,
+					RemoteIP:    agentMessageInput.RemoteIP,
+					AuthContext: getMessageProcessingAuthContext(uuidInfo, agentMessageInput.AuthContext),
 				}
 				currentDelegateMessageBytes := []byte(delegate.Message)
 				currentDelegateMessage.Base64Message = &currentDelegateMessageBytes
@@ -516,7 +541,7 @@ func processAgentMessageContent(agentMessageInput *AgentMessageRawInput, uuidInf
 						newResponse.MythicUuid = delegateResponse.NewCallbackUUID
 						newResponse.NewUuid = delegateResponse.NewCallbackUUID
 						// we got an implicit new callback relationship, mark it
-						go callbackGraph.AddByAgentIds(instanceResponse.OuterUuid, delegateResponse.NewCallbackUUID, delegate.C2ProfileName, uuidInfo.OperationID)
+						go callbackGraph.AddByAgentIds(parentCallbackUUID, delegateResponse.NewCallbackUUID, delegate.C2ProfileName, uuidInfo.OperationID)
 					} else {
 						if delegateResponse.OuterUuid != "" && delegateResponse.OuterUuid != delegate.SuppliedUuid {
 							newResponse.MythicUuid = delegateResponse.OuterUuid
@@ -524,7 +549,7 @@ func processAgentMessageContent(agentMessageInput *AgentMessageRawInput, uuidInf
 						} else {
 							newResponse.SuppliedUuid = delegate.SuppliedUuid
 						}
-						go callbackGraph.AddByAgentIds(instanceResponse.OuterUuid, delegateResponse.OuterUuid, delegate.C2ProfileName, uuidInfo.OperationID)
+						go callbackGraph.AddByAgentIds(parentCallbackUUID, delegateResponse.OuterUuid, delegate.C2ProfileName, uuidInfo.OperationID)
 					}
 					//go callbackGraph.AddByAgentIds(outerUUID, delegateResponse.OuterUuid, delegate.C2ProfileName)
 					delegateResponses = append(delegateResponses, newResponse)
@@ -704,6 +729,16 @@ func recursiveProcessAgentMessage(agentMessageInput *AgentMessageRawInput) recur
 	// 4. look up c2 profile and information about UUID
 	uuidInfo, err := LookupEncryptionData(agentMessageInput.C2Profile, messageUUID.String(), agentMessageInput.UpdateCheckinTime)
 	if err != nil {
+		// Only consumed staging aliases need the exchange ledger fallback.
+		// Active routes, including built-in crypto, use ordinary UUID lookup.
+		if cached, ok, cacheErr := cachedCryptoProviderExchange(messageUUID.String(), base64DecodedMessage[agentUUIDLength:], agentMessageInput.C2Profile, agentMessageInput.AuthContext, agentUUIDLength, agentMessageInput.RemoteIP); ok || cacheErr != nil {
+			instanceResponse.Message, instanceResponse.Err = cached, cacheErr
+			instanceResponse.OuterUuid = messageUUID.String()
+			if instanceResponse.Err == nil {
+				instanceResponse.Err = populateCryptoProviderResponseMetadata(&instanceResponse, messageUUID.String(), base64DecodedMessage[agentUUIDLength:])
+			}
+			return instanceResponse
+		}
 		errorMessage := err.Error() + "\n"
 		errorMessage += fmt.Sprintf("Connection from %s via %s\n", agentMessageInput.RemoteIP, agentMessageInput.C2Profile)
 		go SendAllOperationsMessage(errorMessage, uuidInfo.OperationID, messageUUID.String(), database.MESSAGE_LEVEL_AGENT_MESSGAGE, true)
@@ -728,6 +763,17 @@ func recursiveProcessAgentMessage(agentMessageInput *AgentMessageRawInput) recur
 	}
 	messageProcessingAuthContext := getMessageProcessingAuthContext(uuidInfo, agentMessageInput.AuthContext)
 	decryptBytes := base64DecodedMessage[agentUUIDLength:totalBase64Bytes]
+	if uuidInfo.CryptoProvider != nil && (uuidInfo.UUIDType == UUIDTYPEPAYLOAD || uuidInfo.UUIDType == UUIDTYPESTAGING) {
+		instanceResponse.Message, instanceResponse.Err = processCryptoProviderEstablishment(uuidInfo, decryptBytes, agentUUIDLength, agentMessageInput.RemoteIP, messageProcessingAuthContext)
+		instanceResponse.OuterUuid = uuidInfo.UUID
+		if instanceResponse.Err == nil {
+			instanceResponse.Err = populateCryptoProviderResponseMetadata(&instanceResponse, uuidInfo.UUID, decryptBytes)
+		}
+		return instanceResponse
+	}
+	if uuidInfo.CryptoProvider != nil && uuidInfo.UUIDType == UUIDTYPECALLBACK {
+		return processCryptoProviderCallback(agentMessageInput, uuidInfo, decryptBytes, agentUUIDLength, messageProcessingAuthContext)
+	}
 	decryptedMessage, err := DecryptMessageWithAuthContext(uuidInfo, &decryptBytes, messageProcessingAuthContext)
 	if err != nil {
 		logging.LogError(err, "Failed to decrypt message and process as JSON")
@@ -798,8 +844,8 @@ func LookupEncryptionData(c2profile string, messageUUID string, updateCheckinTim
 	payload := databaseStructs.Payload{}
 	stager := databaseStructs.Staginginfo{}
 	if err := database.DB.Get(&callback, `SELECT
-		callback.id, callback.enc_key, callback.dec_key, callback.crypto_type, callback.operation_id, callback.last_checkin, callback.display_id, callback.trigger_on_checkin_after_time, callback.active,
-		payload.id "payload.id", 
+		callback.id, callback.enc_key, callback.dec_key, callback.crypto_type, callback.operation_id, callback.last_checkin, callback.display_id, callback.trigger_on_checkin_after_time, callback.active,callback.crypto_provider_binding_id,
+		payload.id "payload.id", payload.uuid "payload.uuid",
 		payloadtype.id "payload.payloadtype.id", 
 		payloadtype.name "payload.payloadtype.name", 
 		payloadtype.mythic_encrypts "payload.payloadtype.mythic_encrypts",
@@ -826,6 +872,8 @@ func LookupEncryptionData(c2profile string, messageUUID string, updateCheckinTim
 		newCache.CallbackEncKey = callback.EncKey
 		newCache.CallbackDecKey = callback.DecKey
 		newCache.CryptoType = callback.CryptoType
+		newCache.CryptoProviderBindingID = callback.CryptoProviderBindingID.String
+		newCache.PayloadUUID = callback.Payload.UuID
 		newCache.CallbackID = callback.ID
 		newCache.CallbackDisplayID = callback.DisplayID
 		newCache.LastCheckinTime = callback.LastCheckin
@@ -845,10 +893,14 @@ func LookupEncryptionData(c2profile string, messageUUID string, updateCheckinTim
 		JOIN payloadtype on payload.payload_type_id = payloadtype.id
 		WHERE payload.uuid=$1`, messageUUID); err == nil {
 		// we're looking at a payload message
+		if err = validatePayloadCryptoProviderRoute(payload.ID, c2profile); err != nil {
+			return &newCache, err
+		}
 		newCache.UUID = messageUUID
 		newCache.UUIDType = UUIDTYPEPAYLOAD
 		newCache.CallbackAllowedFromPayload = payload.CallbackAllowed
 		newCache.PayloadID = payload.ID
+		newCache.PayloadUUID = payload.UuID
 		newCache.PayloadTypeID = payload.Payloadtype.ID
 		newCache.PayloadTypeName = payload.Payloadtype.Name
 		newCache.PayloadTypeMessageFormat = payload.Payloadtype.MessageFormat
@@ -866,6 +918,7 @@ func LookupEncryptionData(c2profile string, messageUUID string, updateCheckinTim
 		foundCryptoParam := false
 		cryptoParam := []databaseStructs.C2profileparametersinstance{}
 		if err = database.DB.Select(&cryptoParam, `SELECT
+			c2profileparametersinstance.crypto_provider_binding_id,
 			c2profileparametersinstance.enc_key, 
 			c2profileparametersinstance.dec_key, 
 			c2profileparametersinstance.value,
@@ -890,28 +943,38 @@ func LookupEncryptionData(c2profile string, messageUUID string, updateCheckinTim
 				newCache.C2CryptoType[i] = cryptoParam[i].Value
 			}
 		}
-		payloadCryptoParam := databaseStructs.Buildparameterinstance{}
-		if err = database.DB.Get(&payloadCryptoParam, `SELECT
-			enc_key, dec_key, value
-			FROM buildparameterinstance
-			WHERE dec_key IS NOT NULL AND payload_id=$1`, payload.ID); err == sql.ErrNoRows {
-			logging.LogDebug("payload has no associated build parameter instance with a crypto type")
+		payloadCryptoParams := []databaseStructs.Buildparameterinstance{}
+		if err = database.DB.Select(&payloadCryptoParams, `SELECT
+			i.enc_key, i.dec_key, i.value,i.crypto_provider_binding_id
+			FROM buildparameterinstance i
+			LEFT JOIN buildparameter p ON p.id=i.build_parameter_id
+			WHERE (i.dec_key IS NOT NULL OR i.crypto_provider_binding_id IS NOT NULL OR
+			       (p.crypto_type=true AND i.value LIKE 'provider:%')) AND i.payload_id=$1`, payload.ID); err != nil {
+			return &newCache, err
+		}
+		if len(payloadCryptoParams) == 0 {
 			if !foundCryptoParam {
-				// only set this to "none" if we didn't find a c2 profile with a crypto param
 				newCache.CryptoType = "none"
 			}
-
-		} else if err != nil {
-			logging.LogError(err, "Failed to fetch buildparameterinstance crypto values for payload")
-			return &newCache, err
 		} else {
-			newCache.PayloadDecKey = payloadCryptoParam.DecKey
-			newCache.PayloadEncKey = payloadCryptoParam.EncKey
-			newCache.CryptoType = payloadCryptoParam.Value
+			newCache.PayloadDecKey = payloadCryptoParams[0].DecKey
+			newCache.PayloadEncKey = payloadCryptoParams[0].EncKey
+			newCache.CryptoType = payloadCryptoParams[0].Value
+		}
+		candidates := make([]cryptoProviderCandidate, 0, len(cryptoParam)+len(payloadCryptoParams))
+		for _, param := range cryptoParam {
+			candidates = append(candidates, cryptoProviderCandidate{BindingID: param.CryptoProviderBindingID.String, Value: param.Value})
+		}
+		for _, param := range payloadCryptoParams {
+			candidates = append(candidates, cryptoProviderCandidate{BindingID: param.CryptoProviderBindingID.String, Value: param.Value})
+		}
+		newCache.CryptoProviderBindingID, err = selectCryptoProviderBinding(candidates)
+		if err != nil {
+			return &newCache, err
 		}
 	} else if err = database.DB.Get(&stager, `SELECT
-		staginginfo.id, staginginfo.enc_key, staginginfo.dec_key, staginginfo.crypto_type,
-		payload.id "payload.id",
+		staginginfo.id, staginginfo.enc_key, staginginfo.dec_key, staginginfo.crypto_type,staginginfo.crypto_provider_binding_id,
+		payload.id "payload.id",payload.uuid "payload.uuid",
 		payload.operation_id "payload.operation_id",
 		payload.callback_allowed "payload.callback_allowed",
 		payloadtype.id "payload.payloadtype.id", 
@@ -931,6 +994,8 @@ func LookupEncryptionData(c2profile string, messageUUID string, updateCheckinTim
 		newCache.StagingEncKey = stager.EncKey
 		newCache.StagingDecKey = stager.DecKey
 		newCache.CryptoType = stager.CryptoType
+		newCache.CryptoProviderBindingID = stager.CryptoProviderBindingID.String
+		newCache.PayloadUUID = stager.Payload.UuID
 		newCache.PayloadID = stager.Payload.ID
 		newCache.PayloadTypeID = stager.Payload.Payloadtype.ID
 		newCache.PayloadTypeName = stager.Payload.Payloadtype.Name
@@ -951,6 +1016,14 @@ func LookupEncryptionData(c2profile string, messageUUID string, updateCheckinTim
 		errorMessage := fmt.Sprintf("Failed to correlate UUID, %s, to something Mythic knows.\n", messageUUID)
 		errorMessage += fmt.Sprintf("%s is likely a Callback or Payload from a Mythic instance that was deleted or had the database reset.\n", messageUUID)
 		return &newCache, errors.New(errorMessage)
+	}
+	if newCache.CryptoProviderBindingID != "" {
+		var bindingErr error
+		newCache.CryptoProvider, bindingErr = loadCryptoProviderBinding(newCache.CryptoProviderBindingID, newCache.OperationID)
+		if bindingErr != nil {
+			return &newCache, bindingErr
+		}
+		newCache.MythicEncrypts = true
 	}
 	if newCache.TranslationContainerID > 0 {
 		if err := database.DB.Get(&newCache.TranslationContainerName, `SELECT
@@ -987,7 +1060,7 @@ func DecryptMessageWithAuthContext(uuidInfo *cachedUUIDInfo, agentMessage *[]byt
 		if uuidInfo.TranslationContainerName == "" {
 			// we decrypt and return the JSON bytes
 			//logging.LogTrace("about to decrypt", "key", hex.EncodeToString(*uuidInfo.DecKey), "agentMessage", hex.EncodeToString(agentMessage))
-			decrypted, err := uuidInfo.IterateAndAct(agentMessage, "decrypt")
+			decrypted, err := uuidInfo.IterateAndActWithAuthContext(agentMessage, "decrypt", authContext)
 			if err != nil {
 				return nil, err
 			}
@@ -999,7 +1072,7 @@ func DecryptMessageWithAuthContext(uuidInfo *cachedUUIDInfo, agentMessage *[]byt
 			return jsonAgentMessage, nil
 		}
 		// we decrypt, but then need to pass to translation container
-		decrypted, err := uuidInfo.IterateAndAct(agentMessage, "decrypt")
+		decrypted, err := uuidInfo.IterateAndActWithAuthContext(agentMessage, "decrypt", authContext)
 		if err != nil {
 			logging.LogError(err, "Failed to get decryption keys and decrypt")
 			return nil, err
@@ -1074,7 +1147,7 @@ func EncryptMessageWithAuthContext(uuidInfo *cachedUUIDInfo, outerUUID string, a
 				logging.LogError(err, "Failed to marshal the final agent message before encrypting")
 				return nil, err
 			}
-			encryptedBytes, err := uuidInfo.IterateAndAct(&jsonBytes, "encrypt")
+			encryptedBytes, err := uuidInfo.IterateAndActWithAuthContext(&jsonBytes, "encrypt", authContext)
 			if err != nil {
 				logging.LogError(err, "Failed to encrypt bytes")
 				return nil, err
@@ -1115,7 +1188,7 @@ func EncryptMessageWithAuthContext(uuidInfo *cachedUUIDInfo, outerUUID string, a
 			logging.LogError(nil, "empty message from Mythic->C2 translation")
 			return nil, errors.New("empty message from Mythic->C2 translation")
 		}
-		encryptedBytes, err := uuidInfo.IterateAndAct(&convertedResponse.Message, "encrypt")
+		encryptedBytes, err := uuidInfo.IterateAndActWithAuthContext(&convertedResponse.Message, "encrypt", authContext)
 		if err != nil {
 			logging.LogError(err, "Failed to encrypt bytes")
 			go SendAllOperationsMessage(fmt.Sprintf("Failed to encrypt bytes:\n%s", err.Error()), uuidInfo.OperationID,

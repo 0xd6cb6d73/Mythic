@@ -112,7 +112,7 @@ func CallbackDecryptMessage(input MythicRPCCallbackDecryptBytesMessage, authCont
 	if cachedInfo.MythicEncrypts {
 		// Mythic does encryption, so handle it
 		//logging.LogInfo("Decrypt message", "mythic encrypts", true)
-		decrypted, err := cachedInfo.IterateAndAct(&agentMessage, "decrypt")
+		decrypted, err := cachedInfo.IterateAndActWithAuthContext(&agentMessage, "decrypt", authContext)
 		if err != nil {
 			return nil, err
 		}

@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/its-a-feature/Mythic/authentication/mythicjwt"
-	mythicCrypto "github.com/its-a-feature/Mythic/crypto"
 	"github.com/its-a-feature/Mythic/database"
 	databaseStructs "github.com/its-a-feature/Mythic/database/structs"
 	"github.com/its-a-feature/Mythic/logging"
@@ -218,8 +217,9 @@ func associateBuildParametersWithPayload(databasePayload databaseStructs.Payload
 			BuildParameterID: databaseBuildParameter.ID,
 			Value:            finalBuildParameters[databaseBuildParameter.Name],
 		}
+		var providerConfig json.RawMessage
 		if databaseBuildParameter.IsCryptoType {
-			if databasePayload.Payloadtype.TranslationContainerID.Valid && !databasePayload.Payloadtype.MythicEncrypts {
+			if databasePayload.Payloadtype.TranslationContainerID.Valid && !databasePayload.Payloadtype.MythicEncrypts && !strings.HasPrefix(finalBuildParameters[databaseBuildParameter.Name], "provider:") {
 				cryptoKeysResponse, err := RabbitMQConnection.SendTrRPCGenerateEncryptionKeys(TrGenerateEncryptionKeysMessage{
 					TranslationContainerName: databasePayload.Payloadtype.Translationcontainer.Name,
 					C2Name:                   "",
@@ -241,11 +241,15 @@ func associateBuildParametersWithPayload(databasePayload databaseStructs.Payload
 					databaseBuildParameterInstance.DecKey = cryptoKeysResponse.DecryptionKey
 				}
 			} else {
-				cryptoKeys, err := mythicCrypto.GenerateKeysForPayload(finalBuildParameters[databaseBuildParameter.Name])
+				cryptoKeys, err := prepareCryptoProviderKeysForPayload(databasePayload.Payloadtype, finalBuildParameters[databaseBuildParameter.Name], databasePayload.OperationID, authContext)
 				if err != nil {
 					logging.LogError(err, "Failed to generate crypto keys for payload")
 					return nil, err
 				}
+				if cryptoKeys.BindingID != nil {
+					databaseBuildParameterInstance.CryptoProviderBindingID = sql.NullString{String: *cryptoKeys.BindingID, Valid: true}
+				}
+				providerConfig = cryptoKeys.ProviderConfig
 				if cryptoKeys.EncKey != nil {
 					databaseBuildParameterInstance.EncKey = cryptoKeys.EncKey
 				}
@@ -259,7 +263,7 @@ func associateBuildParametersWithPayload(databasePayload databaseStructs.Payload
 			finalBuildParameters[databaseBuildParameter.Name],
 			databaseBuildParameterInstance.EncKey,
 			databaseBuildParameterInstance.DecKey,
-			databaseBuildParameter.IsCryptoType)
+			databaseBuildParameter.IsCryptoType, providerConfig)
 		if err != nil {
 			logging.LogError(err, "Failed to convert build parameter into interface")
 			return nil, err
@@ -267,8 +271,8 @@ func associateBuildParametersWithPayload(databasePayload databaseStructs.Payload
 		returnBuildParameters[databaseBuildParameter.Name] = interfaceParam
 
 		_, err = database.DB.NamedExec(`INSERT INTO 
-				buildparameterinstance (payload_id, value, build_parameter_id, enc_key, dec_key)
-				VALUES (:payload_id, :value, :build_parameter_id, :enc_key, :dec_key)`,
+				buildparameterinstance (payload_id, value, build_parameter_id, enc_key, dec_key, crypto_provider_binding_id)
+				VALUES (:payload_id, :value, :build_parameter_id, :enc_key, :dec_key, :crypto_provider_binding_id)`,
 			databaseBuildParameterInstance)
 		if err != nil {
 			logging.LogError(err, "Failed to create new buildparameter instance mapping")
@@ -414,8 +418,9 @@ func associateC2ProfilesWithPayload(databasePayload databaseStructs.Payload, c2P
 			}
 			c2ParameterInstance.OperationID.Valid = true
 			c2ParameterInstance.OperationID.Int64 = int64(databasePayload.OperationID)
+			var providerConfig json.RawMessage
 			if databaseC2ProfileParameter.IsCryptoType {
-				if databasePayload.Payloadtype.TranslationContainerID.Valid && !databasePayload.Payloadtype.MythicEncrypts {
+				if databasePayload.Payloadtype.TranslationContainerID.Valid && !databasePayload.Payloadtype.MythicEncrypts && !strings.HasPrefix(paramStringVal, "provider:") {
 					cryptoKeysResponse, err := RabbitMQConnection.SendTrRPCGenerateEncryptionKeys(TrGenerateEncryptionKeysMessage{
 						TranslationContainerName: databasePayload.Payloadtype.Translationcontainer.Name,
 						C2Name:                   "",
@@ -437,11 +442,15 @@ func associateC2ProfilesWithPayload(databasePayload databaseStructs.Payload, c2P
 						c2ParameterInstance.DecKey = cryptoKeysResponse.DecryptionKey
 					}
 				} else {
-					cryptoKeys, err := mythicCrypto.GenerateKeysForPayload(paramStringVal)
+					cryptoKeys, err := prepareCryptoProviderKeysForPayload(databasePayload.Payloadtype, paramStringVal, databasePayload.OperationID, authContext)
 					if err != nil {
 						logging.LogError(err, "Failed to generate crypto keys for payload", "value", paramStringVal, "name", databaseC2ProfileParameter.Name)
 						return nil, err
 					}
+					if cryptoKeys.BindingID != nil {
+						c2ParameterInstance.CryptoProviderBindingID = sql.NullString{String: *cryptoKeys.BindingID, Valid: true}
+					}
+					providerConfig = cryptoKeys.ProviderConfig
 					if cryptoKeys.EncKey != nil {
 						c2ParameterInstance.EncKey = cryptoKeys.EncKey
 					}
@@ -456,6 +465,7 @@ func associateC2ProfilesWithPayload(databasePayload databaseStructs.Payload, c2P
 				c2ParameterInstance.EncKey,
 				c2ParameterInstance.DecKey,
 				databaseC2ProfileParameter.IsCryptoType,
+				providerConfig,
 			)
 			if err != nil {
 				logging.LogError(err, "Failed to convert c2 parameter to interface")
@@ -463,8 +473,8 @@ func associateC2ProfilesWithPayload(databasePayload databaseStructs.Payload, c2P
 			}
 			finalC2Profile.Parameters[databaseC2ProfileParameter.Name] = interfaceParam
 			_, err = database.DB.NamedExec(`INSERT INTO
-							c2profileparametersinstance (payload_id, c2_profile_id, c2_profile_parameters_id, value, enc_key, dec_key, operation_id, count)
-							VALUES (:payload_id, :c2_profile_id, :c2_profile_parameters_id, :value, :enc_key, :dec_key, :operation_id, :count)`,
+							c2profileparametersinstance (payload_id, c2_profile_id, c2_profile_parameters_id, value, enc_key, dec_key, operation_id, count, crypto_provider_binding_id)
+							VALUES (:payload_id, :c2_profile_id, :c2_profile_parameters_id, :value, :enc_key, :dec_key, :operation_id, :count, :crypto_provider_binding_id)`,
 				c2ParameterInstance)
 			if err != nil {
 				logging.LogError(err, "Failed to save c2 profile parameter instance into database")

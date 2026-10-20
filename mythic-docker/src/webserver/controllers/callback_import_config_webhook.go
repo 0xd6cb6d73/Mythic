@@ -49,6 +49,10 @@ func ImportCallbackConfigWebhook(c *gin.Context) {
 		return
 	}
 	callbackConfig := input.Input.Config
+	if callbackConfig.CryptoProviderManaged {
+		c.JSON(http.StatusOK, ImportCallbackConfigResponse{Status: "error", Error: "provider-managed callback sessions must establish a new authenticated session; configuration import cannot restore them"})
+		return
+	}
 	// get the associated database information
 	operatorOperation := ginOperatorOperation.(*databaseStructs.Operatoroperation)
 	// have to process the callback configuration in order from most generic to most specific

@@ -20,27 +20,31 @@ import (
 )
 
 type MythicRPCCallbackCreateMessage struct {
-	PayloadUUID          string   `json:"payload_uuid" mapstructure:"uuid"`     // required
-	C2ProfileName        string   `json:"c2_profile" mapstructure:"c2_profile"` // required
-	EncryptionKey        *[]byte  `json:"encryption_key" mapstructure:"enc_key"`
-	DecryptionKey        *[]byte  `json:"decryption_key" mapstructure:"dec_key"`
-	CryptoType           string   `json:"crypto_type" mapstructure:"crypto_type"`
-	User                 string   `json:"user" mapstructure:"user"`
-	Host                 string   `json:"host" mapstructure:"host"`
-	PID                  int      `json:"pid" mapstructure:"pid"`
-	ExtraInfo            string   `json:"extra_info"  mapstructure:"extra_info"`
-	SleepInfo            string   `json:"sleep_info" mapstructure:"sleep_info"`
-	Ip                   string   `json:"ip" mapstructure:"ip"`
-	IPs                  []string `json:"ips" mapstructure:"ips"`
-	ExternalIP           string   `json:"external_ip" mapstructure:"external_ip"`
-	IntegrityLevel       *int     `json:"integrity_level" mapstructure:"integrity_level"`
-	Os                   string   `json:"os" mapstructure:"os"`
-	Domain               string   `json:"domain" mapstructure:"domain"`
-	Architecture         string   `json:"architecture" mapstructure:"architecture"`
-	Description          string   `json:"description" mapstructure:"description"`
-	ProcessName          string   `json:"process_name" mapstructure:"process_name"`
-	Cwd                  string   `json:"cwd" mapstructure:"cwd"`
-	ImpersonationContext string   `json:"impersonation_context" mapstructure:"impersonation_context"`
+	// These claims are set only after the backend authenticates a staged session.
+	CryptoProviderBindingID   *string  `json:"-" mapstructure:"-"`
+	CryptoProviderRequestID   string   `json:"-" mapstructure:"-"`
+	CryptoProviderStagingUUID string   `json:"-" mapstructure:"-"`
+	PayloadUUID               string   `json:"payload_uuid" mapstructure:"uuid"`     // required
+	C2ProfileName             string   `json:"c2_profile" mapstructure:"c2_profile"` // required
+	EncryptionKey             *[]byte  `json:"encryption_key" mapstructure:"enc_key"`
+	DecryptionKey             *[]byte  `json:"decryption_key" mapstructure:"dec_key"`
+	CryptoType                string   `json:"crypto_type" mapstructure:"crypto_type"`
+	User                      string   `json:"user" mapstructure:"user"`
+	Host                      string   `json:"host" mapstructure:"host"`
+	PID                       int      `json:"pid" mapstructure:"pid"`
+	ExtraInfo                 string   `json:"extra_info"  mapstructure:"extra_info"`
+	SleepInfo                 string   `json:"sleep_info" mapstructure:"sleep_info"`
+	Ip                        string   `json:"ip" mapstructure:"ip"`
+	IPs                       []string `json:"ips" mapstructure:"ips"`
+	ExternalIP                string   `json:"external_ip" mapstructure:"external_ip"`
+	IntegrityLevel            *int     `json:"integrity_level" mapstructure:"integrity_level"`
+	Os                        string   `json:"os" mapstructure:"os"`
+	Domain                    string   `json:"domain" mapstructure:"domain"`
+	Architecture              string   `json:"architecture" mapstructure:"architecture"`
+	Description               string   `json:"description" mapstructure:"description"`
+	ProcessName               string   `json:"process_name" mapstructure:"process_name"`
+	Cwd                       string   `json:"cwd" mapstructure:"cwd"`
+	ImpersonationContext      string   `json:"impersonation_context" mapstructure:"impersonation_context"`
 }
 type MythicRPCCallbackCreateMessageResponse struct {
 	Success           bool   `json:"success"`
@@ -149,6 +153,18 @@ func MythicRPCCallbackCreate(input MythicRPCCallbackCreateMessage, authContext R
 		} else if len(processPieces.PathPieces) > 0 {
 			callback.ProcessShortName = processPieces.PathPieces[len(processPieces.PathPieces)-1]
 		}
+	}
+	if input.CryptoProviderBindingID != nil {
+		return createCryptoProviderCallback(input, authContext, callback, payload)
+	}
+	managedRoute, err := payloadRouteUsesCryptoProvider(payload.ID, input.C2ProfileName)
+	if err != nil {
+		response.Error = "failed to resolve callback crypto selection"
+		return response
+	}
+	if managedRoute {
+		response.Error = "provider callbacks require an authenticated staged checkin"
+		return response
 	}
 	transaction, err := database.DB.Beginx()
 	if err != nil {
@@ -272,11 +288,12 @@ func MythicRPCCallbackCreate(input MythicRPCCallbackCreateMessage, authContext R
 		}
 		for _, c2paraminstance := range payloadC2ProfileParameterInstances {
 			c2Instance := databaseStructs.C2profileparametersinstance{
-				C2ProfileParametersID: c2paraminstance.C2ProfileParametersID,
-				C2ProfileID:           pc2p.C2profile.ID,
-				Value:                 c2paraminstance.Value,
-				EncKey:                c2paraminstance.EncKey,
-				DecKey:                c2paraminstance.DecKey,
+				C2ProfileParametersID:   c2paraminstance.C2ProfileParametersID,
+				C2ProfileID:             pc2p.C2profile.ID,
+				Value:                   c2paraminstance.Value,
+				EncKey:                  c2paraminstance.EncKey,
+				DecKey:                  c2paraminstance.DecKey,
+				CryptoProviderBindingID: c2paraminstance.CryptoProviderBindingID,
 			}
 			c2Instance.CallbackID.Int64 = int64(callback.ID)
 			c2Instance.CallbackID.Valid = true
@@ -327,6 +344,23 @@ func MythicRPCCallbackCreate(input MythicRPCCallbackCreateMessage, authContext R
 		}
 
 	}
+	notifyCallbackCreated(callback, payload, authContext)
+	if _, err := database.DB.Exec(`INSERT INTO payloadonhost
+					(host, payload_id, operation_id) VALUES
+					($1, $2, $3)`,
+		callback.Host, payload.ID, callback.OperationID); err != nil {
+		logging.LogError(err, "Failed to register callback on host")
+	}
+	response.AgentCallbackID = callback.AgentCallbackID
+	response.CallbackID = callback.ID
+	response.CallbackDisplayID = callback.DisplayID
+	response.Success = true
+	triggerCallbackCreatedEvents(callback, authContext)
+	return response
+}
+
+// notifyCallbackCreated augments commands and emits callback notifications.
+func notifyCallbackCreated(callback databaseStructs.Callback, payload databaseStructs.Payload, authContext RabbitMQAuthContext) {
 	addCommandAugmentsToCallback(callback.ID, payload.Os, payload.Payloadtype.Name, callback.OperatorID, authContext)
 	operationsMsg := fmt.Sprintf("New Callback (%d) %s@%s with pid %d", callback.DisplayID, callback.User, callback.Host, callback.PID)
 	go SendAllOperationsMessage(operationsMsg, callback.OperationID, "", database.MESSAGE_LEVEL_INFO, false)
@@ -352,7 +386,7 @@ func MythicRPCCallbackCreate(input MythicRPCCallbackCreateMessage, authContext R
 		ImpersonationContext: callback.ImpersonationContext,
 	}
 	webhookMapData := map[string]interface{}{}
-	err = mapstructure.Decode(webhookData, &webhookMapData)
+	err := mapstructure.Decode(webhookData, &webhookMapData)
 	if err != nil {
 		logging.LogError(err, "Failed to convert struct to map for sending callback webhook")
 	}
@@ -368,16 +402,10 @@ func MythicRPCCallbackCreate(input MythicRPCCallbackCreateMessage, authContext R
 			Data:             webhookMapData,
 		})
 	}
-	if _, err := database.DB.Exec(`INSERT INTO payloadonhost 
-					(host, payload_id, operation_id) VALUES 
-					($1, $2, $3)`,
-		callback.Host, payload.ID, callback.OperationID); err != nil {
-		logging.LogError(err, "Failed to register callback on host")
-	}
-	response.AgentCallbackID = callback.AgentCallbackID
-	response.CallbackID = callback.ID
-	response.CallbackDisplayID = callback.DisplayID
-	response.Success = true
+}
+
+// triggerCallbackCreatedEvents runs after callback setup is complete.
+func triggerCallbackCreatedEvents(callback databaseStructs.Callback, authContext RabbitMQAuthContext) {
 	go sendPtOnNewCallback(callback.ID, authContext)
 	go func(triggerData databaseStructs.Callback) {
 		EventingChannel <- EventNotification{
@@ -388,8 +416,8 @@ func MythicRPCCallbackCreate(input MythicRPCCallbackCreateMessage, authContext R
 			PayloadID:   callback.RegisteredPayloadID,
 		}
 	}(callback)
-	return response
 }
+
 func sendPtOnNewCallback(callbackId int, authContext RabbitMQAuthContext) {
 	allCallbackData := GetOnNewCallbackConfigurationForContainer(callbackId)
 	_ = RabbitMQConnection.SendPtOnNewCallback(allCallbackData, authContext)
