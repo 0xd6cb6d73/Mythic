@@ -16,6 +16,7 @@ require (
 	github.com/rabbitmq/amqp091-go v1.10.0
 	github.com/rs/zerolog v1.34.0
 	github.com/rubenv/sql-migrate v1.8.1
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/spf13/viper v1.21.0
 	github.com/vektah/gqlparser/v2 v2.5.31
 	golang.org/x/exp v0.0.0-20260312153236-7ab1446f8b90

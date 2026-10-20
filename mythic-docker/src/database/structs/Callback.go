@@ -1,6 +1,7 @@
 package databaseStructs
 
 import (
+	"database/sql"
 	"github.com/its-a-feature/Mythic/utils/structs"
 	"github.com/lib/pq"
 	"time"
@@ -31,6 +32,7 @@ type Callback struct {
 	OperationID               int               `db:"operation_id" json:"operation_id" mapstructure:"operation_id"`
 	Operation                 Operation         `db:"operation" json:"-"`
 	CryptoType                string            `db:"crypto_type" json:"crypto_type" mapstructure:"crypto_type"`
+	CryptoProviderBindingID   sql.NullString    `db:"crypto_provider_binding_id" json:"-" mapstructure:"-"`
 	DecKey                    *[]byte           `db:"dec_key" json:"dec_key" mapstructure:"dec_key"`
 	EncKey                    *[]byte           `db:"enc_key" json:"enc_key" mapstructure:"enc_key"`
 	Os                        string            `db:"os" json:"os" mapstructure:"os"`
