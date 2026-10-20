@@ -119,7 +119,7 @@ Each storage `request_id` is a canonical UUID and is distinct from the immutable
 
 Storage responses are plain JSON with `api_version`, the exact request's `request_id` and `provider_name`, and either `success: true, result: ...` or `success: false, error: {code, message}`. Check these correlation fields. Error codes are `invalid_input`, `not_found`, `already_exists`, `stale_writer`, `request_conflict`, `internal_error`, and `unauthorized`. Malformed or unauthorized requests may receive a generic rejection without correlation fields; callers must treat those responses as unresolved, not as trusted operation outcomes. Native state and operation results are never ordinary operator/UI fields.
 
-All methods address a stable `namespace` and `state_id`. Namespace, state ID, and request ID use ASCII letters, digits, `.`, `_`, `:`, `/`, or `-`. Their respective byte limits are 128, 256, and 128. A state blob has a 16 MiB limit, provider JSON a 1 MiB limit, and result JSON a 16 MiB limit.
+All methods address a stable `namespace` and `state_id`. Namespace, state ID, and request ID use ASCII letters, digits, `.`, `_`, `:`, `/`, or `-`. Their respective byte limits are 128, 256, and 128. A state blob has a 16 MiB limit, provider JSON a 1 MiB limit, and result JSON a 64 MiB limit. The result budget includes JSON/base64 encoding overhead in addition to the provider's decoded message bytes.
 
 | Method | Input in addition to `namespace`, `state_id` | Result |
 | --- | --- | --- |

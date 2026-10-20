@@ -44,6 +44,14 @@ func TestStoreRejectsInvalidRequestsBeforeDatabaseAccess(t *testing.T) {
 	if _, err := validateStateData(make([]byte, MaxStateBlobBytes+1), nil); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("oversize checkpoint: %v", err)
 	}
+	result := bytes.Repeat([]byte{'a'}, MaxResultBytes+1)
+	result[0], result[len(result)-1] = '"', '"'
+	if _, err := s.Commit(ctx, 1, CommitStateRequest{
+		StateKey: key, OwnerEpoch: 1, RequestID: "oversize-result",
+		InputDigest: strings.Repeat("a", 64), Result: result,
+	}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("oversize result: %v", err)
+	}
 }
 
 // These tests exercise PostgreSQL row locking, JSONB behavior, and rollback of
@@ -120,6 +128,42 @@ func TestStorePostgres(t *testing.T) {
 		current, err := s.Load(ctx, 1, key)
 		if err != nil || string(current.StateBlob) != "checkpoint-1" || current.Revision != 1 || current.OwnerEpoch != 2 {
 			t.Fatalf("stale writes changed state: state=%+v err=%v", current, err)
+		}
+	})
+
+	t.Run("large binary result survives commit and replay", func(t *testing.T) {
+		key := StateKey{Namespace: "large-result", StateID: "server"}
+		owner := createStoreOwner(t, s, key)
+		// Exercise a full-sized binary message inside its base64 JSON envelope.
+		message := bytes.Repeat([]byte{0, 255, 128, '\n'}, (32<<20)/4)
+		encoded, err := json.Marshal(struct {
+			Message []byte `json:"message"`
+		}{Message: message})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := storeCommitRequest(key, "large-message", owner.OwnerEpoch, 0, "checkpoint")
+		req.Result = encoded
+		first, err := s.Commit(ctx, 1, req)
+		if err != nil || first.Cached {
+			t.Fatalf("commit large result: %v", err)
+		}
+		lookup, err := s.LookupResult(ctx, 1, LookupResultRequest{
+			StateKey: key, RequestID: req.RequestID, InputDigest: req.InputDigest,
+		})
+		if err != nil {
+			t.Fatalf("lookup large result: %v", err)
+		}
+		replay, err := s.Commit(ctx, 1, req)
+		if err != nil || !replay.Cached || replay.Revision != first.Revision ||
+			!bytes.Equal(first.Result, lookup.Result) || !bytes.Equal(first.Result, replay.Result) {
+			t.Fatalf("replay large result: %v", err)
+		}
+		var decoded struct {
+			Message []byte `json:"message"`
+		}
+		if err := json.Unmarshal(replay.Result, &decoded); err != nil || !bytes.Equal(decoded.Message, message) {
+			t.Fatalf("large binary result changed: %v", err)
 		}
 	})
 
